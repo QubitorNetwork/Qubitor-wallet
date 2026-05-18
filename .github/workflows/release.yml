@@ -1,0 +1,319 @@
+# Release pipeline — runs on a v* tag. Publishes a single PUBLIC GitHub Release
+# (directly downloadable) carrying the desktop installers (macOS / Windows /
+# Ubuntu), the Chrome MV3 extension zip, and — when its build succeeds — a
+# self-signed Android APK, plus a SHA256SUMS manifest.
+#
+# Honest constraints (see docs/PUBLISHING.md):
+#   - No iOS target (no Apple Developer account).
+#   - Desktop/Windows/macOS builds are UNSIGNED until certs are supplied as
+#     secrets; users will see Gatekeeper / SmartScreen warnings.
+#   - The Android APK is self-signed for sideload testing, not Play upload, and
+#     is best-effort: it never blocks the public desktop/extension release.
+
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  desktop:
+    name: desktop (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            artifact: macos
+          - os: windows-latest
+            artifact: windows
+          - os: ubuntu-22.04
+            artifact: ubuntu
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.18.2
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Linux build deps
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev \
+            librsvg2-dev patchelf libsecret-1-dev libdbus-1-dev pkg-config \
+            build-essential
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build desktop bundles
+        uses: tauri-apps/tauri-action@v0
+        with:
+          projectPath: apps/desktop
+          # beforeBuildCommand in tauri.conf.json runs the Expo web export.
+
+      - name: Collect installers
+        shell: bash
+        run: |
+          mkdir -p out
+          base=apps/desktop/src-tauri/target/release/bundle
+          find "$base" -type f \
+            \( -name '*.dmg' -o -name '*.app.tar.gz' -o -name '*.msi' \
+               -o -name '*.exe' -o -name '*.AppImage' -o -name '*.deb' \) \
+            -exec cp {} out/ \; || true
+          ls -la out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ matrix.artifact }}
+          path: out/*
+          if-no-files-found: error
+
+  extension:
+    name: extension (chrome mv3)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.18.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Build + package extension
+        run: |
+          pnpm --filter @qubitor/extension build
+          pnpm --filter @qubitor/extension package
+      - name: Stage zip
+        run: |
+          mkdir -p out
+          cp apps/extension/build/*.zip out/quanta-extension-chrome-mv3.zip
+          ls -la out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: extension
+          path: out/*
+          if-no-files-found: error
+
+  android:
+    name: android apk (self-signed)
+    runs-on: ubuntu-22.04
+    # Best-effort: the self-signed APK is sideload-test-only and must not block
+    # the public desktop/extension release. The APK is attached automatically
+    # on a later re-tag once the Android Metro bundle resolves cleanly.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.18.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+      - run: pnpm install --frozen-lockfile
+
+      - name: Expo prebuild (android)
+        working-directory: apps/mobile
+        run: pnpm exec expo prebuild -p android --no-install
+
+      - name: Pin Android Kotlin toolchain
+        working-directory: apps/mobile/android
+        run: |
+          python3 - <<'PY'
+          import pathlib
+
+          build = pathlib.Path("build.gradle")
+          source = build.read_text()
+          marker = 'apply plugin: "com.facebook.react.rootproject"\n'
+          pins = """
+          // Keep Expo Modules Core and Compose Compiler on the same Kotlin line.
+          ext.kotlinVersion = findProperty('android.kotlinVersion') ?: '1.9.25'
+          ext.kspVersion = findProperty('android.kspVersion') ?: '1.9.25-1.0.20'
+          """
+          if "ext.kotlinVersion = findProperty('android.kotlinVersion')" not in source:
+              source = source.replace(marker, marker + pins, 1)
+              build.write_text(source)
+
+          props = pathlib.Path("gradle.properties")
+          text = props.read_text()
+          text = text.replace("newArchEnabled=true", "newArchEnabled=false")
+          additions = []
+          if "android.kotlinVersion=" not in text:
+              additions.append("android.kotlinVersion=1.9.25")
+          if "android.kspVersion=" not in text:
+              additions.append("android.kspVersion=1.9.25-1.0.20")
+          if additions:
+              props.write_text(text.rstrip() + "\n" + "\n".join(additions) + "\n")
+
+          roots = [
+              pathlib.Path("../../../node_modules/.pnpm"),
+              pathlib.Path("../node_modules/.pnpm"),
+          ]
+          plugins = []
+          for root in roots:
+              if root.exists():
+                  plugins.extend(root.glob("expo-modules-core@*/node_modules/expo-modules-core/android/ExpoModulesCorePlugin.gradle"))
+          if not plugins:
+              raise SystemExit("ExpoModulesCorePlugin.gradle not found")
+          for plugin in plugins:
+              plugin_text = plugin.read_text()
+              patched = plugin_text.replace(': "1.9.24"', ': "1.9.25"')
+              if patched != plugin_text:
+                  plugin.write_text(patched)
+                  print(f"Patched {plugin}")
+
+          catalogs = []
+          for root in roots:
+              if root.exists():
+                  catalogs.extend(root.rglob("gradle/libs.versions.toml"))
+          if not catalogs:
+              raise SystemExit("Gradle libs.versions.toml not found")
+          for catalog in catalogs:
+              catalog_text = catalog.read_text()
+              patched = catalog_text.replace('kotlin = "1.9.24"', 'kotlin = "1.9.25"')
+              if patched != catalog_text:
+                  catalog.write_text(patched)
+                  print(f"Patched {catalog}")
+          PY
+
+      - name: Generate self-signed keystore
+        working-directory: apps/mobile/android
+        run: |
+          keytool -genkeypair -v -keystore release.keystore \
+            -alias quanta -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass quanta-ci -keypass quanta-ci \
+            -dname "CN=Quanta Wallet (self-signed CI), O=Qubitor, C=US"
+          cat >> gradle.properties <<'EOF'
+          QUANTA_UPLOAD_STORE_FILE=release.keystore
+          QUANTA_UPLOAD_KEY_ALIAS=quanta
+          QUANTA_UPLOAD_STORE_PASSWORD=quanta-ci
+          QUANTA_UPLOAD_KEY_PASSWORD=quanta-ci
+          EOF
+
+      - name: Wire release signing config
+        working-directory: apps/mobile/android
+        run: |
+          python3 - <<'PY'
+          import re, pathlib
+          g = pathlib.Path("app/build.gradle")
+          s = g.read_text()
+          sign = '''
+              signingConfigs {
+                  release {
+                      storeFile file(QUANTA_UPLOAD_STORE_FILE)
+                      storePassword QUANTA_UPLOAD_STORE_PASSWORD
+                      keyAlias QUANTA_UPLOAD_KEY_ALIAS
+                      keyPassword QUANTA_UPLOAD_KEY_PASSWORD
+                  }
+              }
+          '''
+          s = s.replace("buildTypes {", sign + "\n        buildTypes {", 1)
+          s = s.replace(
+              "release {\n            // Caution!",
+              "release {\n            signingConfig signingConfigs.release\n            // Caution!", 1)
+          if "signingConfig signingConfigs.release" not in s:
+              s = re.sub(r"(buildTypes \{\s*release \{)",
+                         r"\1\n            signingConfig signingConfigs.release", s, count=1)
+          package_list_patch = '''
+
+          afterEvaluate {
+              tasks.matching { it.name == "compileReleaseJavaWithJavac" }.configureEach {
+                  doFirst {
+                      def packageList = file("$buildDir/generated/autolinking/src/main/java/com/facebook/react/PackageList.java")
+                      if (packageList.exists()) {
+                          packageList.text = packageList.text.replace(
+                              "import expo.core.ExpoModulesPackage;",
+                              "import expo.modules.ExpoModulesPackage;"
+                          )
+                      }
+                  }
+              }
+          }
+          '''
+          if "expo.core.ExpoModulesPackage" not in s:
+              s = s.rstrip() + package_list_patch
+          g.write_text(s)
+          PY
+
+      - name: Assemble release APK
+        working-directory: apps/mobile/android
+        run: ./gradlew assembleRelease --no-daemon
+
+      - name: Stage APK
+        run: |
+          mkdir -p out
+          cp apps/mobile/android/app/build/outputs/apk/release/app-release.apk \
+             out/quanta-wallet.apk
+          ls -la out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android
+          path: out/*
+          if-no-files-found: error
+
+  release:
+    name: publish release + checksums
+    # Wait for Android too so a successful APK is present before publishing.
+    # Android is still best-effort (`continue-on-error: true`), while desktop
+    # + extension remain the hard gates for a public release.
+    needs: [desktop, extension, android]
+    if: ${{ always() && needs.desktop.result == 'success' && needs.extension.result == 'success' }}
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: staging
+      - name: Flatten + checksum
+        run: |
+          mkdir -p dist
+          find staging -type f -exec cp {} dist/ \;
+          cd dist
+          ls -la
+          sha256sum * > SHA256SUMS
+          echo "## Artifacts" >> $GITHUB_STEP_SUMMARY
+          cat SHA256SUMS >> $GITHUB_STEP_SUMMARY
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          NOTES="Desktop installers (macOS / Windows / Ubuntu) and the Chrome MV3 extension. A self-signed Android APK is attached when its build succeeds (sideload-test only).
+
+          **Unsigned builds** — macOS Gatekeeper / Windows SmartScreen will warn. Verify downloads against \`SHA256SUMS\`. See docs/PUBLISHING.md."
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber dist/*
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" \
+              --draft=false --latest \
+              --title "Quanta Wallet $TAG" --notes "$NOTES"
+          else
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
+              --latest \
+              --title "Quanta Wallet $TAG" --notes "$NOTES" \
+              dist/*
+          fi

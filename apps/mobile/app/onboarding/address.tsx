@@ -1,0 +1,93 @@
+import { useState } from "react";
+import { View } from "react-native";
+import { router } from "expo-router";
+import QRCode from "react-native-qrcode-svg";
+import { colors } from "@qubitor/ui-tokens";
+import { Copy, Globe, Share2 } from "lucide-react-native";
+import { PageContainer } from "@/components/PageContainer";
+import { PageHeader } from "@/components/PageHeader";
+import { Text } from "@/components/Text";
+import { Card } from "@/components/Card";
+import { Badge } from "@/components/Badge";
+import { Button } from "@/components/Button";
+import { IconAction } from "@/components/IconAction";
+import { AddressDisplay } from "@/components/AddressDisplay";
+import { QrFrame } from "@/components/QrFrame";
+import { DebugOnly } from "@/components/DebugOnly";
+import { ChainPickerSheet } from "@/components/sheets/ChainPickerSheet";
+import { ShareSheet } from "@/components/sheets/ShareSheet";
+import { CopySheet } from "@/components/sheets/CopySheet";
+import { useMockState } from "@/hooks/useMockState";
+import { WarningCard } from "@/components/WarningCard";
+import { useAccountSnapshot } from "@/hooks/useAccountSnapshot";
+
+const STATES = ["Counterfactual", "Deployed", "Copy success", "QR expanded"] as const;
+
+/** Source: SWallet `Receive.png` — first-time onboarding variant. */
+export default function YourAddress() {
+  const { variant, cycle } = useMockState(STATES, "Counterfactual");
+  const snapshot = useAccountSnapshot();
+  const { account } = snapshot;
+  const [chain, setChain] = useState("");
+  const [copyOpen, setCopyOpen] = useState(false);
+  const [chainOpen, setChainOpen] = useState(false);
+  const [shareOpen, setShareOpen] = useState(false);
+
+  return (
+    <PageContainer>
+      <PageHeader title="Your 0x Address" centerTitle />
+
+      <View className="gap-6">
+        <View className="items-center">
+          <QrFrame>
+            <QRCode value={account.address} size={200} color={colors.text} backgroundColor="transparent" />
+          </QrFrame>
+          <View className="mt-5 items-center gap-2">
+            <AddressDisplay address={account.address} />
+            <Badge label={account.security.mode} />
+          </View>
+        </View>
+
+        <View className="flex-row gap-3">
+          <IconAction label="Copy" Icon={Copy} onPress={() => setCopyOpen(true)} />
+          <IconAction label={chain || snapshot.chainName} Icon={Globe} onPress={() => setChainOpen(true)} />
+          <IconAction label="Share" Icon={Share2} onPress={() => setShareOpen(true)} />
+        </View>
+
+        {variant === "Counterfactual" ? (
+          <WarningCard
+            severity="info"
+            title="Counterfactual address"
+            detail="Your address is reserved. It deploys on chain the first time you confirm a supported action."
+          />
+        ) : null}
+
+        <Card>
+          <Text variant="body" muted>
+            This is your Qubitor smart account address. It uses a normal 0x format while Qubitor's programmable
+            validation controls security underneath.
+          </Text>
+        </Card>
+
+        <View className="items-center">
+          <Button onPress={() => router.push("/onboarding/summary")}>Continue</Button>
+        </View>
+
+        <DebugOnly>
+          <Button variant="tertiary" onPress={cycle}>
+            State: {variant}
+          </Button>
+        </DebugOnly>
+      </View>
+
+      <ChainPickerSheet
+        visible={chainOpen}
+        onDismiss={() => setChainOpen(false)}
+        selected={chain || snapshot.chainName}
+        onSelect={setChain}
+      />
+      <ShareSheet visible={shareOpen} onDismiss={() => setShareOpen(false)} payload={account.address} />
+      <CopySheet visible={copyOpen} onDismiss={() => setCopyOpen(false)} label="Address" />
+    </PageContainer>
+  );
+}

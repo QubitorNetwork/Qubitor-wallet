@@ -1,0 +1,31 @@
+[package]
+name = "quanta-wallet-desktop"
+version = "0.0.12"
+description = "Quanta Wallet desktop"
+authors = ["Qubitor"]
+edition = "2021"
+rust-version = "1.77"
+
+[lib]
+name = "quanta_wallet_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-shell = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# OS-native credential storage: macOS Keychain, Windows Credential Manager,
+# Linux Secret Service (libsecret).
+keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Build libdbus from the crate vendor source on Linux CI/dev machines where
+# pkg-config or libdbus headers are not installed.
+libdbus-sys = { version = "0.2.7", features = ["vendored"] }
+
+[features]
+custom-protocol = ["tauri/custom-protocol"]

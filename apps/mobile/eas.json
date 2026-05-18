@@ -1,0 +1,39 @@
+{
+  "cli": {
+    "version": ">= 5.9.0",
+    "appVersionSource": "remote"
+  },
+  "build": {
+    "development": {
+      "developmentClient": true,
+      "distribution": "internal",
+      "channel": "development",
+      "env": {
+        "EXPO_PUBLIC_QUBITOR_DEBUG": "1"
+      }
+    },
+    "testnet-beta": {
+      "distribution": "internal",
+      "channel": "testnet-beta",
+      "ios": { "simulator": false },
+      "android": { "buildType": "apk" },
+      "env": {
+        "EXPO_PUBLIC_QUBITOR_DEBUG": "0",
+        "EXPO_PUBLIC_QUBITOR_CHAIN_ID": "91338",
+        "EXPO_PUBLIC_QUBITOR_REQUIRE_BIOMETRIC": "1"
+      }
+    },
+    "production": {
+      "channel": "production",
+      "autoIncrement": true,
+      "android": { "buildType": "app-bundle" },
+      "env": {
+        "EXPO_PUBLIC_QUBITOR_DEBUG": "0",
+        "EXPO_PUBLIC_QUBITOR_REQUIRE_BIOMETRIC": "1"
+      }
+    }
+  },
+  "submit": {
+    "production": {}
+  }
+}

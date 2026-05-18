@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(forge test)",
+      "Bash(forge test *)",
+      "Bash(pnpm typecheck)",
+      "Bash(pnpm lint)",
+      "Bash(pnpm --filter @qubitor/mobile typecheck)",
+      "Bash(pnpm --filter @qubitor/extension typecheck)",
+      "Bash(pnpm install)"
+    ]
+  }
+}

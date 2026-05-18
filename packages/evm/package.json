@@ -1,0 +1,24 @@
+{
+  "name": "@qubitor/evm",
+  "version": "0.0.12",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "tsx src/index.test.ts"
+  },
+  "dependencies": {
+    "@qubitor/chain-config": "0.1.1",
+    "@qubitor/core": "workspace:*",
+    "@qubitor/pq-native-tx": "0.1.1",
+    "@qubitor/pq-crypto": "workspace:*",
+    "@qubitor/sdk": "0.1.1",
+    "viem": "^2.21.55"
+  },
+  "devDependencies": {
+    "tsx": "^4.21.0",
+    "typescript": "^5.6.3"
+  }
+}

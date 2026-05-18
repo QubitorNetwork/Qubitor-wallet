@@ -1,0 +1,41 @@
+{
+  "name": "qubitor",
+  "private": true,
+  "version": "0.0.12",
+  "description": "Qubitor monorepo: Qubitor Network smart account wallet with PQ-native validation.",
+  "scripts": {
+    "dev": "turbo run dev",
+    "dev:mobile": "pnpm --filter @qubitor/mobile dev",
+    "dev:extension": "pnpm --filter @qubitor/extension dev",
+    "mobile:devnet-acceptance": "pnpm --filter @qubitor/mobile devnet:acceptance",
+    "mobile:testnet-acceptance": "EXPO_PUBLIC_QUBITOR_CHAIN_ID=91338 pnpm --filter @qubitor/mobile devnet:acceptance",
+    "extension:testnet-acceptance": "pnpm --filter @qubitor/extension testnet:acceptance",
+    "mobile:devnet-ui-smoke": "pnpm --filter @qubitor/mobile devnet:ui-smoke",
+    "wallet:pq-vault:generate": "pnpm --filter @qubitor/mobile pq-vault:generate",
+    "wallet:testnet-pq-vault:generate": "EXPO_PUBLIC_QUBITOR_CHAIN_ID=91338 pnpm --filter @qubitor/mobile pq-vault:generate",
+    "wallet:pq-native:acceptance": "bash scripts/pq-native-wallet-acceptance.sh",
+    "build": "turbo run build",
+    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck",
+    "forge:build": "forge build --root packages/contracts",
+    "forge:test": "forge test --root packages/contracts"
+  },
+  "devDependencies": {
+    "@babel/plugin-transform-react-jsx": "^7.28.6",
+    "turbo": "^2.3.3",
+    "typescript": "^5.6.3"
+  },
+  "packageManager": "pnpm@10.18.2",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "sharp",
+      "esbuild",
+      "lmdb",
+      "msgpackr-extract",
+      "unrs-resolver"
+    ]
+  }
+}

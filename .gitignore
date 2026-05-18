@@ -1,0 +1,75 @@
+# Foundry
+cache/
+out/
+broadcast/
+packages/contracts/cache/
+packages/contracts/out/
+packages/contracts/broadcast/
+
+# Node / pnpm
+node_modules/
+.pnpm-store/
+*.log
+npm-debug.log*
+pnpm-debug.log*
+.env
+.env.*
+!.env.example
+!.env.*.example
+.env*.local
+artifacts/
+
+# Turborepo
+.turbo/
+
+# TypeScript build output
+dist/
+build/
+*.tsbuildinfo
+
+# Expo
+.expo/
+.expo-shared/
+web-build/
+apps/mobile/android/
+apps/mobile/ios/
+*.jks
+*.keystore
+keystore.properties
+*.keystore.properties
+*.apk
+*.aab
+*.apks
+*.ipa
+*.dmg
+*.app.tar.gz
+*.AppImage
+*.deb
+*.rpm
+*.msi
+*.exe
+*.p8
+*.p12
+*.key
+*.mobileprovision
+*.orig.*
+
+# Wallet-local exports / backups
+quanta-wallet-*.json
+quanta-recovery-kit*.json
+qubitor-pq-vault*.json
+pq-vault*.json
+
+# Plasmo / Browser extension
+.plasmo/
+build/chrome-mv3-dev/
+build/chrome-mv3-prod/
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Claude Code runtime (settings.json is tracked intentionally)
+.claude/scheduled_tasks.lock
