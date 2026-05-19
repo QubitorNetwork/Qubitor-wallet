@@ -38,10 +38,14 @@ const weightClass: Record<NonNullable<Props["weight"]>, string> = {
   bold: "font-bold",
 };
 
+const explicitTextColorPattern =
+  /\btext-(?:qb-black|qb-ink|qb-panel|qb-bone|qb-mist|qb-line|qb-line-strong|qb-spark|warn|crit|background|surface|surface-strong|primary|primary-pressed|text|text-muted|divider)\b/;
+
 export function Text({ variant = "body", muted, weight, className, style, ...rest }: Props) {
+  const colorClass = className && explicitTextColorPattern.test(className) ? "" : muted ? "text-qb-mist" : "text-qb-bone";
   const cls = [
     variantClass[variant],
-    muted ? "text-qb-mist" : "text-qb-bone",
+    colorClass,
     weight ? weightClass[weight] : "",
     className ?? "",
   ]
