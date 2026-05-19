@@ -1,4 +1,4 @@
-import { badgeColorByState, type BadgeColor } from "@qubitor/ui-tokens";
+import { badgeColorByState, colors, type BadgeColor } from "@qubitor/ui-tokens";
 
 interface Props {
   label: string;
@@ -12,11 +12,19 @@ const containerClass: Record<BadgeColor, string> = {
   neutral: "bg-transparent border border-qb-line-strong text-qb-mist",
 };
 
+const textColor: Record<BadgeColor, string> = {
+  positive: colors.background,
+  review: colors.text,
+  warning: colors.warn,
+  neutral: colors.textMuted,
+};
+
 export function Badge({ label, color }: Props) {
   const resolved = color ?? badgeColorByState[label] ?? "neutral";
   return (
     <span
       className={`inline-flex items-center px-2.5 py-1 rounded-pill text-[11px] font-mono uppercase tracking-[0.22em] font-medium ${containerClass[resolved]}`}
+      style={{ color: textColor[resolved] }}
     >
       {label}
     </span>

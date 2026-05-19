@@ -18,6 +18,7 @@ import { Row } from "./Row";
 import { WarningCard } from "./WarningCard";
 import { QrCode } from "./QrCode";
 import { useExtensionWallet } from "../lib/useExtensionWallet";
+import { copyText } from "../lib/clipboard";
 
 const SYSTEM_ADDRESSES = [
   { label: "ML-DSA-65 precompile", value: "0x0000000000000000000000000000000000000100" },
@@ -165,14 +166,10 @@ export function WalletShell() {
 
   const explorer = useMemo(() => explorerBase(w.snapshot?.chainId), [w.snapshot?.chainId]);
 
-  const copy = (text: string) => {
-    navigator.clipboard?.writeText(text).then(
-      () => {
-        setCopied(true);
-        setTimeout(() => setCopied(false), 1500);
-      },
-      () => undefined,
-    );
+  const copy = async (text: string) => {
+    if (!(await copyText(text))) return;
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
   };
 
   if (w.status === "loading") {

@@ -19,6 +19,7 @@ import { CopySheet } from "@/components/sheets/CopySheet";
 import { useMockState } from "@/hooks/useMockState";
 import { useAccountSnapshot } from "@/hooks/useAccountSnapshot";
 import { colors } from "@qubitor/ui-tokens";
+import { copyText } from "@/lib/clipboard";
 
 const STATES = ["Default", "QR expanded", "Copy success", "Unsupported chain selected"] as const;
 
@@ -31,6 +32,10 @@ export default function Receive() {
   const [copyOpen, setCopyOpen] = useState(false);
   const [chainOpen, setChainOpen] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
+
+  const copyAddress = async () => {
+    if (await copyText(account.address, "Address")) setCopyOpen(true);
+  };
 
   return (
     <PageContainer>
@@ -53,7 +58,7 @@ export default function Receive() {
         </View>
 
         <View className="flex-row gap-3">
-          <IconAction label="Copy" Icon={Copy} onPress={() => setCopyOpen(true)} />
+          <IconAction label="Copy" Icon={Copy} onPress={copyAddress} />
           <IconAction label={chain || snapshot.chainName} Icon={Globe} onPress={() => setChainOpen(true)} />
           <IconAction label="Share" Icon={Share2} onPress={() => setShareOpen(true)} />
         </View>
@@ -85,7 +90,12 @@ export default function Receive() {
         selected={chain || snapshot.chainName}
         onSelect={setChain}
       />
-      <ShareSheet visible={shareOpen} onDismiss={() => setShareOpen(false)} payload={account.address} />
+      <ShareSheet
+        visible={shareOpen}
+        onDismiss={() => setShareOpen(false)}
+        payload={account.address}
+        onCopied={() => setCopyOpen(true)}
+      />
       <CopySheet visible={copyOpen} onDismiss={() => setCopyOpen(false)} label="Address" />
     </PageContainer>
   );

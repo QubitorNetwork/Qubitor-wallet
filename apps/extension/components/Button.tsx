@@ -1,4 +1,5 @@
-import type { ButtonHTMLAttributes, ReactNode } from "react";
+import type { ButtonHTMLAttributes, CSSProperties, ReactNode } from "react";
+import { colors } from "@qubitor/ui-tokens";
 
 type Variant = "primary" | "secondary" | "tertiary" | "danger";
 
@@ -17,11 +18,19 @@ const containerClass: Record<Variant, string> = {
   danger: "bg-transparent border border-crit text-crit hover:bg-crit/10",
 };
 
-export function Button({ children, variant = "primary", size = "default", className = "", ...rest }: Props) {
+const textColor: Record<Variant, CSSProperties["color"]> = {
+  primary: colors.background,
+  secondary: colors.text,
+  tertiary: colors.textMuted,
+  danger: colors.crit,
+};
+
+export function Button({ children, variant = "primary", size = "default", className = "", style, ...rest }: Props) {
   const widthClass = size === "block" ? "w-full" : "";
   return (
     <button
       className={`h-12 rounded-pill px-8 font-medium transition-colors disabled:opacity-40 ${containerClass[variant]} ${widthClass} ${className}`}
+      style={{ color: textColor[variant], ...style }}
       {...rest}
     >
       {children}

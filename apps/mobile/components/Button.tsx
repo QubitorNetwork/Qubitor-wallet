@@ -1,5 +1,6 @@
 import { ReactNode } from "react";
 import { Pressable, PressableProps, View } from "react-native";
+import { colors } from "@qubitor/ui-tokens";
 import { Text } from "./Text";
 
 type Variant = "primary" | "secondary" | "tertiary" | "danger";
@@ -27,6 +28,13 @@ const labelClass: Record<Variant, string> = {
   danger: "text-crit",
 };
 
+const labelColor: Record<Variant, string> = {
+  primary: colors.background,
+  secondary: colors.text,
+  tertiary: colors.textMuted,
+  danger: colors.crit,
+};
+
 export function Button({ children, variant = "primary", size = "default", className, disabled, ...rest }: Props) {
   const widthClass = size === "block" ? "w-full" : "";
   const opacity = disabled ? "opacity-40" : "";
@@ -37,7 +45,7 @@ export function Button({ children, variant = "primary", size = "default", classN
       {...rest}
     >
       <View>
-        <Text variant="body-lg" weight="medium" className={labelClass[variant]}>
+        <Text variant="body-lg" weight="medium" className={labelClass[variant]} style={{ color: labelColor[variant] }}>
           {children}
         </Text>
       </View>

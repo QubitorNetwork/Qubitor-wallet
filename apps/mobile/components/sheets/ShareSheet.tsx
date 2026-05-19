@@ -3,30 +3,33 @@ import { Copy, Image as ImageIcon, Share2 } from "lucide-react-native";
 import { Sheet } from "../Sheet";
 import { Text } from "../Text";
 import { colors } from "@qubitor/ui-tokens";
+import { copyText } from "@/lib/clipboard";
 
 interface Props {
   visible: boolean;
   onDismiss: () => void;
   /** Address or link to share. */
   payload: string;
+  onCopied?: () => void;
 }
 
 /** Source: SWallet `Receive.png` "Share" action — exposed as a sheet of share targets. */
-export function ShareSheet({ visible, onDismiss, payload }: Props) {
-  const targets: { Icon: typeof Copy; label: string; onPress: () => void }[] = [
+export function ShareSheet({ visible, onDismiss, payload, onCopied }: Props) {
+  const targets: { Icon: typeof Copy; label: string; onPress: () => void | Promise<void> }[] = [
     {
       Icon: Copy,
       label: "Copy address",
-      onPress: () => {
-        // navigator.clipboard not available in RN — real impl uses expo-clipboard.
+      onPress: async () => {
+        const copied = await copyText(payload, "Address");
         onDismiss();
+        if (copied) onCopied?.();
       },
     },
     {
       Icon: ImageIcon,
       label: "Copy QR image",
       onPress: () => {
-        // real impl saves the QR svg to clipboard.
+        // QR image export needs native image encoding; keep address copy available above.
         onDismiss();
       },
     },

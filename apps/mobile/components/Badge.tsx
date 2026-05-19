@@ -1,5 +1,5 @@
 import { View } from "react-native";
-import { badgeColorByState, type BadgeColor } from "@qubitor/ui-tokens";
+import { badgeColorByState, colors, type BadgeColor } from "@qubitor/ui-tokens";
 import { Text } from "./Text";
 
 interface Props {
@@ -26,11 +26,18 @@ const textClass: Record<BadgeColor, string> = {
   neutral: "text-qb-mist",
 };
 
+const textColor: Record<BadgeColor, string> = {
+  positive: colors.background,
+  review: colors.text,
+  warning: colors.warn,
+  neutral: colors.textMuted,
+};
+
 export function Badge({ label, color }: Props) {
   const resolved = color ?? badgeColorByState[label] ?? "neutral";
   return (
     <View className={`self-start px-2.5 py-1 rounded-pill ${containerClass[resolved]}`}>
-      <Text variant="label" weight="medium" className={textClass[resolved]}>
+      <Text variant="label" weight="medium" className={textClass[resolved]} style={{ color: textColor[resolved] }}>
         {label}
       </Text>
     </View>

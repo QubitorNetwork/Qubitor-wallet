@@ -16,6 +16,11 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
+button {
+  color: inherit;
+  font: inherit;
+}
+
 ::selection {
   background: #ededed;
   color: #050505;

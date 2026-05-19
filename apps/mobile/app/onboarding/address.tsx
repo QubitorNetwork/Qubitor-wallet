@@ -20,6 +20,7 @@ import { CopySheet } from "@/components/sheets/CopySheet";
 import { useMockState } from "@/hooks/useMockState";
 import { WarningCard } from "@/components/WarningCard";
 import { useAccountSnapshot } from "@/hooks/useAccountSnapshot";
+import { copyText } from "@/lib/clipboard";
 
 const STATES = ["Counterfactual", "Deployed", "Copy success", "QR expanded"] as const;
 
@@ -32,6 +33,10 @@ export default function YourAddress() {
   const [copyOpen, setCopyOpen] = useState(false);
   const [chainOpen, setChainOpen] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
+
+  const copyAddress = async () => {
+    if (await copyText(account.address, "Address")) setCopyOpen(true);
+  };
 
   return (
     <PageContainer>
@@ -49,7 +54,7 @@ export default function YourAddress() {
         </View>
 
         <View className="flex-row gap-3">
-          <IconAction label="Copy" Icon={Copy} onPress={() => setCopyOpen(true)} />
+          <IconAction label="Copy" Icon={Copy} onPress={copyAddress} />
           <IconAction label={chain || snapshot.chainName} Icon={Globe} onPress={() => setChainOpen(true)} />
           <IconAction label="Share" Icon={Share2} onPress={() => setShareOpen(true)} />
         </View>
@@ -86,7 +91,12 @@ export default function YourAddress() {
         selected={chain || snapshot.chainName}
         onSelect={setChain}
       />
-      <ShareSheet visible={shareOpen} onDismiss={() => setShareOpen(false)} payload={account.address} />
+      <ShareSheet
+        visible={shareOpen}
+        onDismiss={() => setShareOpen(false)}
+        payload={account.address}
+        onCopied={() => setCopyOpen(true)}
+      />
       <CopySheet visible={copyOpen} onDismiss={() => setCopyOpen(false)} label="Address" />
     </PageContainer>
   );
