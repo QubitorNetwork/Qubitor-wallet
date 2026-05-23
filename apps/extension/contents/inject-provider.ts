@@ -20,7 +20,7 @@ export const config: PlasmoCSConfig = {
 
 interface RequestArgs {
   method: string;
-  params?: unknown[];
+  params?: unknown[] | Record<string, unknown>;
 }
 
 interface ProviderBridgeResponse {
@@ -38,9 +38,43 @@ interface ProviderListener {
   listener: (...args: unknown[]) => void;
 }
 
+interface JsonRpcPayload {
+  id?: string | number | null;
+  jsonrpc?: string;
+  method: string;
+  params?: unknown[] | Record<string, unknown>;
+}
+
+type JsonRpcCallback = (
+  error: (Error & { code?: number }) | null,
+  response?: {
+    id?: string | number | null;
+    jsonrpc: string;
+    result?: unknown;
+    error?: {
+      code?: number;
+      message: string;
+    };
+  },
+) => void;
+
+const CHAIN_ID_HEX = "0x164ca";
+const NETWORK_VERSION = "91338";
+const listeners: ProviderListener[] = [];
+const providerState = {
+  accounts: [] as string[],
+  connected: false,
+};
+
 function nextRequestId(): string {
   const random = Math.random().toString(16).slice(2);
   return `qubitor-${Date.now().toString(16)}-${random}`;
+}
+
+function normalizeParams(params: RequestArgs["params"]): unknown[] {
+  if (Array.isArray(params)) return params;
+  if (params === undefined) return [];
+  return [params];
 }
 
 function requestThroughRelay(args: RequestArgs): Promise<unknown> {
@@ -78,25 +112,181 @@ function requestThroughRelay(args: RequestArgs): Promise<unknown> {
         requestId,
         origin: window.location.origin,
         method: args.method,
-        params: args.params ?? [],
+        params: normalizeParams(args.params),
       },
       "*",
     );
   });
 }
 
-const listeners: ProviderListener[] = [];
+function normalizeAccounts(result: unknown): string[] {
+  if (!Array.isArray(result)) return [];
+  return result.filter((account): account is string => typeof account === "string" && account.startsWith("0x"));
+}
+
+function emit(event: string, ...args: unknown[]) {
+  for (const entry of [...listeners]) {
+    if (entry.event !== event) continue;
+    try {
+      entry.listener(...args);
+    } catch (error) {
+      window.setTimeout(() => {
+        throw error;
+      });
+    }
+  }
+}
+
+function accountsChanged(nextAccounts: string[]): boolean {
+  if (providerState.accounts.length !== nextAccounts.length) return true;
+  return providerState.accounts.some((account, index) => account.toLowerCase() !== nextAccounts[index]?.toLowerCase());
+}
+
+function setAccounts(accounts: string[], announce = true) {
+  const nextAccounts = [...accounts];
+  const changed = accountsChanged(nextAccounts);
+  providerState.accounts = nextAccounts;
+  provider.selectedAddress = nextAccounts[0] ?? null;
+  provider._state.accounts = nextAccounts;
+  provider._state.isUnlocked = true;
+  if (nextAccounts.length > 0) {
+    const wasConnected = providerState.connected;
+    providerState.connected = true;
+    provider._state.isConnected = true;
+    if (!wasConnected && announce) emit("connect", { chainId: CHAIN_ID_HEX });
+  }
+  if (changed && announce) emit("accountsChanged", [...nextAccounts]);
+}
+
+function setDisconnected(announce = true) {
+  const hadAccounts = providerState.accounts.length > 0;
+  providerState.accounts = [];
+  providerState.connected = false;
+  provider.selectedAddress = null;
+  provider._state.accounts = [];
+  provider._state.isConnected = false;
+  if (hadAccounts && announce) emit("accountsChanged", []);
+  if (announce) emit("disconnect", { code: 4900, message: "Quanta Wallet disconnected." });
+}
+
+async function request(args: RequestArgs): Promise<unknown> {
+  const result = await requestThroughRelay(args);
+  const method = args.method;
+
+  if (method === "eth_accounts" || method === "eth_requestAccounts") {
+    setAccounts(normalizeAccounts(result));
+  }
+  if (method === "wallet_requestPermissions") {
+    try {
+      setAccounts(normalizeAccounts(await requestThroughRelay({ method: "eth_accounts" })));
+    } catch {
+      // Permission approval still succeeded; the next eth_accounts call can hydrate state.
+    }
+  }
+  if (method === "wallet_revokePermissions") {
+    setDisconnected();
+  }
+  if (method === "wallet_switchEthereumChain" || method === "wallet_addEthereumChain") {
+    provider.chainId = CHAIN_ID_HEX;
+    provider.networkVersion = NETWORK_VERSION;
+    emit("chainChanged", CHAIN_ID_HEX);
+  }
+
+  return result;
+}
+
+function jsonRpcResponse(payload: JsonRpcPayload, result: unknown) {
+  return {
+    id: payload.id,
+    jsonrpc: payload.jsonrpc ?? "2.0",
+    result,
+  };
+}
+
+function jsonRpcErrorResponse(payload: JsonRpcPayload, error: Error & { code?: number }) {
+  return {
+    id: payload.id,
+    jsonrpc: payload.jsonrpc ?? "2.0",
+    error: {
+      code: error.code,
+      message: error.message,
+    },
+  };
+}
 
 const provider = {
   isQubitor: true,
-  request: requestThroughRelay,
+  chainId: CHAIN_ID_HEX,
+  networkVersion: NETWORK_VERSION,
+  selectedAddress: null as string | null,
+  _state: {
+    accounts: [] as string[],
+    initialized: true,
+    isConnected: false,
+    isUnlocked: true,
+  },
+  request,
+  isConnected: () => true,
+  enable: () => request({ method: "eth_requestAccounts" }),
+  send: (
+    methodOrPayload: string | JsonRpcPayload,
+    paramsOrCallback?: unknown[] | Record<string, unknown> | JsonRpcCallback,
+  ) => {
+    if (typeof methodOrPayload === "string") {
+      return request({
+        method: methodOrPayload,
+        params: typeof paramsOrCallback === "function" ? [] : paramsOrCallback,
+      });
+    }
+
+    const payload = methodOrPayload;
+    const callback = typeof paramsOrCallback === "function" ? paramsOrCallback : undefined;
+    const promise = request({ method: payload.method, params: payload.params });
+    if (!callback) return promise.then((result) => jsonRpcResponse(payload, result));
+
+    promise
+      .then((result) => callback(null, jsonRpcResponse(payload, result)))
+      .catch((error: Error & { code?: number }) => callback(error, jsonRpcErrorResponse(payload, error)));
+    return undefined;
+  },
+  sendAsync: (payload: JsonRpcPayload, callback: JsonRpcCallback) => {
+    request({ method: payload.method, params: payload.params })
+      .then((result) => callback(null, jsonRpcResponse(payload, result)))
+      .catch((error: Error & { code?: number }) => callback(error, jsonRpcErrorResponse(payload, error)));
+  },
   on: (event: string, listener: (...args: unknown[]) => void) => {
     listeners.push({ event, listener });
+    return provider;
+  },
+  addListener: (event: string, listener: (...args: unknown[]) => void) => {
+    listeners.push({ event, listener });
+    return provider;
+  },
+  once: (event: string, listener: (...args: unknown[]) => void) => {
+    const onceListener = (...args: unknown[]) => {
+      provider.removeListener(event, onceListener);
+      listener(...args);
+    };
+    listeners.push({ event, listener: onceListener });
     return provider;
   },
   removeListener: (event: string, listener: (...args: unknown[]) => void) => {
     const index = listeners.findIndex((entry) => entry.event === event && entry.listener === listener);
     if (index >= 0) listeners.splice(index, 1);
+    return provider;
+  },
+  off: (event: string, listener: (...args: unknown[]) => void) => {
+    provider.removeListener(event, listener);
+    return provider;
+  },
+  removeAllListeners: (event?: string) => {
+    if (!event) {
+      listeners.splice(0, listeners.length);
+      return provider;
+    }
+    for (let index = listeners.length - 1; index >= 0; index -= 1) {
+      if (listeners[index]?.event === event) listeners.splice(index, 1);
+    }
     return provider;
   },
 };
@@ -129,4 +319,7 @@ if (typeof window !== "undefined") {
   }
   window.addEventListener("eip6963:requestProvider", announceProvider);
   announceProvider();
+  window.setTimeout(() => {
+    void request({ method: "eth_accounts" }).catch(() => undefined);
+  }, 0);
 }

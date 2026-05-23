@@ -508,7 +508,15 @@ function postProviderResponse(
       error: response.error,
     });
   } finally {
-    if (disconnect) port.disconnect();
+    if (disconnect) {
+      setTimeout(() => {
+        try {
+          port.disconnect();
+        } catch {
+          // The content relay may already have closed after receiving the response.
+        }
+      }, 100);
+    }
   }
 }
 
