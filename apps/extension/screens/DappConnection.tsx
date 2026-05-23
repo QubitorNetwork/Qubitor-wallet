@@ -36,6 +36,20 @@ export function DappConnection({
   const account = request?.account;
   const isCreating = !account;
   const canConnect = !loading && (Boolean(account) || passcode.length >= 8);
+  const passcodeHelper = passcode.length >= 8
+    ? "Ready to create your encrypted extension account."
+    : `${Math.max(0, 8 - passcode.length)} more character${8 - passcode.length === 1 ? "" : "s"} needed.`;
+  const accountValue = loading ? "Loading..." : account ? shortAddress(account) : "Will be created after approval";
+
+  const connect = () => {
+    if (!canConnect) return;
+    onConnect?.(isCreating ? passcode : undefined);
+  };
+
+  const connectLimited = () => {
+    if (!canConnect) return;
+    onLimited?.(isCreating ? passcode : undefined);
+  };
 
   return (
     <div className="min-h-screen bg-background text-text font-sans">
@@ -61,7 +75,7 @@ export function DappConnection({
           <Row label="Site" value={host} />
           <Row label="Requested method" value={request?.method ?? "eth_requestAccounts"} />
           <Row label="Network" value={`Qubitor ${request?.chainIdHex ?? ""}`.trim()} />
-          <Row label="Account" value={loading ? "Loading..." : shortAddress(account)} last />
+          <Row label="Account" value={accountValue} last />
         </Card>
 
         <Card>
@@ -82,24 +96,32 @@ export function DappConnection({
               type="password"
               value={passcode}
               onChange={(event) => setPasscode(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") connect();
+              }}
               className="mt-3 h-12 w-full rounded-md border border-qb-line bg-qb-black px-4 text-qb-bone outline-none focus:border-qb-bone"
               placeholder="At least 8 characters"
+              minLength={8}
               autoFocus
             />
-            <p className="mt-3 text-xs text-qb-mist">
+            <div className="mt-3 flex items-center justify-between gap-3 text-xs">
+              <span className={passcode.length >= 8 ? "text-qb-bone" : "text-warn"}>{passcodeHelper}</span>
+              <span className="font-mono text-qb-mist">{Math.min(passcode.length, 8)}/8</span>
+            </div>
+            <p className="mt-2 text-xs text-qb-mist">
               The ML-DSA key is encrypted locally in this browser extension. Plaintext keys are not stored.
             </p>
           </Card>
         ) : null}
 
         <div className="space-y-3 pt-2">
-          <Button size="block" onClick={() => onConnect?.(isCreating ? passcode : undefined)} disabled={!canConnect}>
-            {isCreating ? "Create and connect" : "Connect"}
+          <Button size="block" onClick={connect} disabled={!canConnect}>
+            {isCreating && !canConnect ? "Enter passcode to create" : isCreating ? "Create and connect" : "Connect"}
           </Button>
           <Button
             variant="secondary"
             size="block"
-            onClick={() => onLimited?.(isCreating ? passcode : undefined)}
+            onClick={connectLimited}
             disabled={!canConnect}
           >
             {isCreating ? "Create view-only" : "Connect view-only"}

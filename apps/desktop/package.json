@@ -1,6 +1,6 @@
 {
   "name": "@qubitor/desktop",
-  "version": "0.0.16",
+  "version": "0.0.17",
   "private": true,
   "scripts": {
     "gen:icons": "tauri icon ../mobile/assets/icon.png",
