@@ -10,12 +10,9 @@ import { Button } from "@/components/Button";
 import { WarningCard } from "@/components/WarningCard";
 import { Badge } from "@/components/Badge";
 import { colors } from "@qubitor/ui-tokens";
-import { useMockState } from "@/hooks/useMockState";
-import { DebugOnly } from "@/components/DebugOnly";
 import { shareDebugBundle } from "@/lib/externalActions";
 import { useAccountSnapshot } from "@/hooks/useAccountSnapshot";
-
-const STATES = ["Disabled", "Enabled", "Transaction debug", "Export ready", "Logs unavailable"] as const;
+import { QUBITOR_ACCOUNT_FACTORY, QUBITOR_MLDSA65_PRECOMPILE } from "@qubitor/evm";
 
 function shortHash(value?: string) {
   if (!value) return "Not recorded";
@@ -47,22 +44,17 @@ function ExpandableSection({
 
 /** Source: SWallet `Setting.png` + `Wallet analytics (transactions).png` (compact rows). */
 export default function DeveloperMode() {
-  const { variant, cycle } = useMockState(STATES, "Enabled");
   const snapshot = useAccountSnapshot();
   const account = snapshot.account;
   const accountAddressLabel = snapshot.accountReady ? account.address : "Loading";
-
-  const disabled = variant === "Disabled";
-  const showTxDebug = variant === "Transaction debug";
-  const exportReady = variant === "Export ready";
-  const logsUnavailable = variant === "Logs unavailable";
+  const latestTx = snapshot.pqTxReceipt ?? snapshot.pqRotateReceipt ?? snapshot.deployReceipt;
 
   return (
     <PageContainer>
       <PageHeader
         title="Developer Mode"
         showBack
-        trailing={<Badge label={disabled ? "Off" : "On"} color={disabled ? "neutral" : "positive"} />}
+        trailing={<Badge label="Live" color={snapshot.status === "live" ? "positive" : "neutral"} />}
       />
 
       <View className="gap-4">
@@ -72,17 +64,14 @@ export default function DeveloperMode() {
           detail="Developer Mode shows raw account and transaction details. Normal users do not need these fields to use Qubitor safely."
         />
 
-        {disabled ? (
-          <Card>
-            <Text variant="body" muted>
-              Developer Mode is off. Enable it to inspect account internals, UserOperations, and signatures.
-            </Text>
-            <View className="mt-3 self-start">
-              <Button>Enable Developer Mode</Button>
-            </View>
-          </Card>
-        ) : (
-          <>
+        {snapshot.status === "fallback" ? (
+          <WarningCard
+            severity="warning"
+            title="Live RPC unavailable"
+            detail={snapshot.error ?? "Developer details are limited to local wallet metadata."}
+          />
+        ) : null}
+
             <ExpandableSection title="Smart account" defaultOpen>
               <Row label="Address" value={accountAddressLabel} showChevron={false} />
               <Row label="Chain ID" value={String(account.chainId)} showChevron={false} />
@@ -105,62 +94,50 @@ export default function DeveloperMode() {
               <Row label="RPC status" value={snapshot.status === "live" ? "Live" : snapshot.status} showChevron={false} />
               {snapshot.latestBlock ? <Row label="Latest block" value={snapshot.latestBlock} showChevron={false} /> : null}
               <Row label="RPC URL" value={snapshot.rpcUrl ?? "Default"} showChevron={false} />
-              <Row label="Factory" value={snapshot.isQubitorDevnet ? "QubitorAccountFactory" : "0xFACADE…00FA"} showChevron={false} />
-              <Row label="Precompile" value={snapshot.isQubitorDevnet ? "0x0000…0100" : "n/a"} showChevron={false} last />
+              <Row label="Factory" value={QUBITOR_ACCOUNT_FACTORY} showChevron={false} />
+              <Row label="ML-DSA precompile" value={QUBITOR_MLDSA65_PRECOMPILE} showChevron={false} last />
             </ExpandableSection>
 
             <ExpandableSection title="Modules">
               <Row label="Validation" value={snapshot.isQubitorDevnet ? "ML-DSA-65 native" : "HybridSigValidator v1.2"} showChevron={false} />
-              <Row label="Recovery" value="GuardianModule v1.0" showChevron={false} />
-              <Row label="Session keys" value="SessionKeyModule v0.9" showChevron={false} last />
+              <Row label="Recovery" value="Encrypted Recovery Kit" showChevron={false} />
+              <Row label="Connected apps" value="Extension storage only" showChevron={false} last />
             </ExpandableSection>
 
-            {showTxDebug ? (
-              <ExpandableSection title="Latest UserOperation" defaultOpen>
-                <Row label="Hash" value="0x9a…c1" showChevron={false} />
-                <Row label="Bundler" value="bundler.qubitor.dev" showChevron={false} />
-                <Row label="Paymaster" value="None" showChevron={false} />
-                <Row label="Status" value="Confirmed" showChevron={false} last />
-              </ExpandableSection>
-            ) : (
-              <ExpandableSection title="UserOperation">
-                <Row label="Latest hash" value="0x9a…c1" showChevron={false} />
-                <Row label="Bundler" value="bundler.qubitor.dev" showChevron={false} />
-                <Row label="Paymaster" value="None" showChevron={false} last />
-              </ExpandableSection>
-            )}
-
-            {logsUnavailable ? (
-              <WarningCard
-                severity="review"
-                title="Logs unavailable"
-                detail="Bundler logs aren't reachable right now. Try again later."
+            <ExpandableSection title="Latest wallet action">
+              <Row
+                label="Transaction"
+                value={
+                  latestTx && "transactionHash" in latestTx && latestTx.transactionHash
+                    ? shortHash(latestTx.transactionHash)
+                    : "None recorded this session"
+                }
+                showChevron={false}
               />
-            ) : null}
-
-            {exportReady ? (
-              <WarningCard
-                severity="info"
-                title="Export ready"
-                detail="A debug bundle is ready for download. Tap Export to share."
+              <Row
+                label="Status"
+                value={latestTx && "status" in latestTx && latestTx.status ? String(latestTx.status) : "—"}
+                showChevron={false}
+                last
               />
-            ) : null}
+            </ExpandableSection>
 
             <View className="items-start">
-              <Button variant="secondary" onPress={() => shareDebugBundle({ account })}>
+              <Button
+                variant="secondary"
+                onPress={() =>
+                  shareDebugBundle({
+                    account,
+                    latestUserOperation:
+                      latestTx && "transactionHash" in latestTx
+                        ? { transactionHash: latestTx.transactionHash, status: "status" in latestTx ? latestTx.status : undefined }
+                        : undefined,
+                  })
+                }
+              >
                 Export debug JSON
               </Button>
             </View>
-          </>
-        )}
-
-        <View className="items-center">
-          <DebugOnly>
-          <Button variant="tertiary" onPress={cycle}>
-            State: {variant}
-          </Button>
-          </DebugOnly>
-        </View>
       </View>
     </PageContainer>
   );

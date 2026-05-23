@@ -13,20 +13,15 @@ import { Button } from "@/components/Button";
 import { IconAction } from "@/components/IconAction";
 import { AddressDisplay } from "@/components/AddressDisplay";
 import { QrFrame } from "@/components/QrFrame";
-import { DebugOnly } from "@/components/DebugOnly";
 import { ChainPickerSheet } from "@/components/sheets/ChainPickerSheet";
 import { ShareSheet } from "@/components/sheets/ShareSheet";
 import { CopySheet } from "@/components/sheets/CopySheet";
-import { useMockState } from "@/hooks/useMockState";
 import { WarningCard } from "@/components/WarningCard";
 import { useAccountSnapshot } from "@/hooks/useAccountSnapshot";
 import { copyText } from "@/lib/clipboard";
 
-const STATES = ["Counterfactual", "Deployed", "Copy success", "QR expanded"] as const;
-
 /** Source: SWallet `Receive.png` — first-time onboarding variant. */
 export default function YourAddress() {
-  const { variant, cycle } = useMockState(STATES, "Counterfactual");
   const snapshot = useAccountSnapshot();
   const { account } = snapshot;
   const accountReady = snapshot.accountReady;
@@ -75,7 +70,7 @@ export default function YourAddress() {
           <IconAction label="Share" Icon={Share2} onPress={() => setShareOpen(true)} disabled={!accountReady} />
         </View>
 
-        {variant === "Counterfactual" ? (
+        {!account.deployed ? (
           <WarningCard
             severity="info"
             title="Counterfactual address"
@@ -96,11 +91,6 @@ export default function YourAddress() {
           </Button>
         </View>
 
-        <DebugOnly>
-          <Button variant="tertiary" onPress={cycle}>
-            State: {variant}
-          </Button>
-        </DebugOnly>
       </View>
 
       <ChainPickerSheet

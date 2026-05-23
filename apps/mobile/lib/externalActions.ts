@@ -34,7 +34,7 @@ export function buildReadinessReport(account: QubitorAccount) {
     readinessScore: readinessScore(account.security),
     notes: [
       "Qubitor readiness comes from smart-account validation logic, not the 0x address format.",
-      "This report is generated from the local wallet state shown in the prototype.",
+      "This report is generated from the current Quanta Wallet runtime state.",
     ],
   };
 }
@@ -46,15 +46,10 @@ export async function shareReadinessReport(account: QubitorAccount) {
 export async function shareDebugBundle(input: DebugBundleInput) {
   const bundle = {
     generatedAt: new Date().toISOString(),
-    build: "prototype",
+    build: "runtime",
     account: input.account,
-    latestUserOperation: input.latestUserOperation ?? {
-      hash: "0x9a000000000000000000000000000000000000000000000000000000000000c1",
-      bundler: "bundler.qubitor.dev",
-      paymaster: null,
-      status: "confirmed",
-    },
-    logs: input.logs ?? ["No live bundler logs attached in prototype mode."],
+    latestUserOperation: input.latestUserOperation ?? null,
+    logs: input.logs ?? [],
   };
 
   await shareText("Qubitor debug bundle", stringifyPayload(bundle));

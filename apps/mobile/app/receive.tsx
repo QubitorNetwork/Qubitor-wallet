@@ -9,23 +9,17 @@ import { Card } from "@/components/Card";
 import { Badge } from "@/components/Badge";
 import { IconAction } from "@/components/IconAction";
 import { AddressDisplay } from "@/components/AddressDisplay";
-import { Button } from "@/components/Button";
 import { WarningCard } from "@/components/WarningCard";
 import { QrFrame } from "@/components/QrFrame";
-import { DebugOnly } from "@/components/DebugOnly";
 import { ChainPickerSheet } from "@/components/sheets/ChainPickerSheet";
 import { ShareSheet } from "@/components/sheets/ShareSheet";
 import { CopySheet } from "@/components/sheets/CopySheet";
-import { useMockState } from "@/hooks/useMockState";
 import { useAccountSnapshot } from "@/hooks/useAccountSnapshot";
 import { colors } from "@qubitor/ui-tokens";
 import { copyText } from "@/lib/clipboard";
 
-const STATES = ["Default", "QR expanded", "Copy success", "Unsupported chain selected"] as const;
-
 /** Source: SWallet `Receive.png` — back arrow + centered title, framed QR, three icon-action squares. */
 export default function Receive() {
-  const { variant, cycle } = useMockState(STATES);
   const snapshot = useAccountSnapshot();
   const { account } = snapshot;
   const accountReady = snapshot.accountReady;
@@ -49,7 +43,7 @@ export default function Receive() {
             {accountReady ? (
               <QRCode
                 value={account.address}
-                size={variant === "QR expanded" ? 240 : 200}
+                size={200}
                 color={colors.text}
                 backgroundColor="transparent"
               />
@@ -79,11 +73,11 @@ export default function Receive() {
           <IconAction label="Share" Icon={Share2} onPress={() => setShareOpen(true)} disabled={!accountReady} />
         </View>
 
-        {variant === "Unsupported chain selected" ? (
+        {snapshot.status === "fallback" ? (
           <WarningCard
             severity="warning"
-            title="Chain not supported"
-            detail="This network may not support all Qubitor security features."
+            title="Live state unavailable"
+            detail={snapshot.error ?? "The address is stored locally, but the RPC is not responding."}
           />
         ) : null}
 
@@ -93,11 +87,6 @@ export default function Receive() {
           </Text>
         </Card>
 
-        <DebugOnly>
-          <Button variant="tertiary" onPress={cycle}>
-            State: {variant}
-          </Button>
-        </DebugOnly>
       </View>
 
       <ChainPickerSheet

@@ -169,6 +169,20 @@ async function main() {
 
     await page.goto(baseUrl, { waitUntil: "domcontentloaded", timeout: 120_000 });
     await page.evaluate(() => window.localStorage.clear());
+    await page.goto(baseUrl, { waitUntil: "networkidle", timeout: 120_000 });
+
+    await waitForText(page, "Create Quanta Account");
+    await page.getByText("Create Quanta Account", { exact: true }).last().click();
+    await waitForText(page, "Create wallet passcode");
+    const passcodeInputs = page.locator("input");
+    await passcodeInputs.nth(0).fill("testnet-smoke-passcode");
+    await passcodeInputs.nth(1).fill("testnet-smoke-passcode");
+    await page.getByText("Create Quanta Account", { exact: true }).last().click();
+    await waitForText(page, "Your 0x Address");
+    const walletStorageKeys = await page.evaluate(() => Object.keys(window.localStorage));
+    if (!walletStorageKeys.some((key) => key.includes("quanta.wallet.mldsa65.profile.encrypted.v1"))) {
+      throw new Error(`Create flow did not persist an encrypted wallet profile. Storage keys: ${walletStorageKeys.join(", ")}`);
+    }
     await page.goto(`${baseUrl}/home`, { waitUntil: "networkidle", timeout: 120_000 });
 
     await waitForText(page, "Quanta Account");
@@ -179,6 +193,14 @@ async function main() {
     await waitForText(page, "Receive");
     await waitForText(page, "Bridge");
     await waitForText(page, "Secure");
+    await page.waitForFunction(
+      () => {
+        const text = document.body.innerText;
+        return text.includes("Deployed") || text.includes("Counterfactual");
+      },
+      undefined,
+      { timeout: 90_000 },
+    );
 
     const bodyText = await page.locator("body").innerText();
     if (!bodyText.includes("Qubitor Devnet") && !bodyText.includes("Qubitor Testnet")) {
@@ -186,6 +208,11 @@ async function main() {
     }
     if (!bodyText.includes("Deployed") && !bodyText.includes("Counterfactual")) {
       throw new Error("Home screen did not show a deployment state.");
+    }
+    await page.goto(baseUrl, { waitUntil: "networkidle", timeout: 120_000 });
+    const bootText = await page.locator("body").innerText();
+    if (bootText.includes("Create Quanta Account")) {
+      throw new Error("Boot routed an existing wallet back to onboarding.");
     }
     if (pageErrors.length > 0) {
       throw new Error(`Browser page error: ${pageErrors[0]}`);
@@ -204,7 +231,15 @@ async function main() {
     const page = pages[0];
     if (page) {
       const bodyText = await page.locator("body").innerText({ timeout: 5000 }).catch(() => "");
+      const storageMeta = await page
+        .evaluate(() =>
+          Object.fromEntries(
+            Object.keys(window.localStorage).map((key) => [key, window.localStorage.getItem(key)?.length ?? 0]),
+          ),
+        )
+        .catch(() => ({}));
       await writeFile(resolve(artifactDir, "failure-body.txt"), bodyText);
+      await writeFile(resolve(artifactDir, "failure-storage.json"), JSON.stringify(storageMeta, null, 2));
       await page.screenshot({ path: resolve(artifactDir, "failure.png"), fullPage: true }).catch(() => undefined);
     }
     throw error;

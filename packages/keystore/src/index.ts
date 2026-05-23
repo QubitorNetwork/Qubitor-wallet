@@ -37,21 +37,24 @@ export interface KeyVault {
  */
 function createLocalFallback(): KeyVault {
   const mem = new Map<string, string>();
-  const ls =
+  const getLocalStorage = () =>
     typeof globalThis !== "undefined"
       ? (globalThis as { localStorage?: WebStorageLike }).localStorage
       : undefined;
   return {
-    backend: ls ? "local-insecure" : "memory-insecure",
+    backend: "local-insecure",
     secure: false,
     async getItem(key) {
+      const ls = getLocalStorage();
       return ls ? ls.getItem(key) : (mem.get(key) ?? null);
     },
     async setItem(key, value) {
+      const ls = getLocalStorage();
       if (ls) ls.setItem(key, value);
       else mem.set(key, value);
     },
     async deleteItem(key) {
+      const ls = getLocalStorage();
       if (ls) ls.removeItem(key);
       else mem.delete(key);
     },

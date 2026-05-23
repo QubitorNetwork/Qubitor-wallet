@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Hex, QubitorAccount, SecurityMode } from "@qubitor/core";
 import {
-  formatBalanceWei,
   deployQubitorDevPQAccount,
-  defaultQubitorRpcUrl,
   defaultQubitorFaucetUrl,
   defaultQubitorPQRelayerUrl,
+  defaultQubitorRpcUrl,
+  formatBalanceWei,
   isQubitorNetwork,
+  QUBITOR_TESTNET_CHAIN_ID,
   readAccountSnapshot,
   readQubitorDevPQAccount,
   readQubitorDevPQRotateAuthorization,
@@ -22,49 +23,38 @@ import {
   type QubitorDevPQTransferReceipt,
   type QubitorFaucetReceipt,
 } from "@qubitor/evm";
-import {
-  MOCK_ACCOUNT,
-  MOCK_ACTIVITY,
-  MOCK_TOKENS,
-  type ActivityItem,
-  type TokenItem,
-} from "@/lib/mockData";
+import type { ActivityItem, TokenItem } from "@/lib/runtimeTypes";
 import {
   generateQubitorDevPQKey,
-  loadOrCreateQubitorDevPQProfile,
+  getUnlockedWalletProfile,
+  getWalletBootStateForAnyChain,
+  getWalletPreview,
   rememberQubitorDevPQDeployment,
+  requireUnlockedWalletProfile,
   rotateStoredQubitorDevPQKey,
   type QubitorDevPQWalletProfile,
+  type QubitorWalletPreview,
+  type WalletBootState,
 } from "@/lib/pqDevWallet";
 import {
   qubitorDevnetPQNativeGasKey,
-  qubitorDevnetPQDeploymentRequest,
   sendQubitorDevnetWalletPQTransfer,
 } from "@/lib/qbtDevnetWalletFlow";
+import { configuredQubitorChainId, readPublicEnv } from "@/lib/runtimeConfig";
 import { readWalletActivity, recordWalletActivity, type WalletActivityItem } from "@/lib/walletActivity";
 import { getSelectedChainId, setSelectedChainId, type SelectableChainId } from "@/lib/networkPreference";
 
 type SnapshotStatus = "loading" | "live" | "fallback";
 type FaucetStatus = "idle" | "requesting" | "success" | "error";
 type PQActionStatus = "idle" | "requesting" | "success" | "error";
+type RuntimeWalletStatus = WalletBootState["status"];
+
 const PLACEHOLDER_ADDRESS = "0x0000000000000000000000000000000000000000" as Hex;
-
-const PLACEHOLDER_ACCOUNT: QubitorAccount = {
-  ...MOCK_ACCOUNT,
-  address: PLACEHOLDER_ADDRESS,
-  deployed: false,
-};
-
-const INLINE_ENV: Record<string, string | undefined> = {
-  EXPO_PUBLIC_QUBITOR_ACCOUNT_ADDRESS: process.env.EXPO_PUBLIC_QUBITOR_ACCOUNT_ADDRESS,
-  EXPO_PUBLIC_QUBITOR_CHAIN_ID: process.env.EXPO_PUBLIC_QUBITOR_CHAIN_ID,
-  EXPO_PUBLIC_QUBITOR_RPC_URL: process.env.EXPO_PUBLIC_QUBITOR_RPC_URL,
-  EXPO_PUBLIC_QUBITOR_FAUCET_URL: process.env.EXPO_PUBLIC_QUBITOR_FAUCET_URL,
-  EXPO_PUBLIC_QUBITOR_PQ_RELAYER_URL: process.env.EXPO_PUBLIC_QUBITOR_PQ_RELAYER_URL,
-};
 
 interface SnapshotState {
   status: SnapshotStatus;
+  walletStatus: RuntimeWalletStatus;
+  walletPreview?: QubitorWalletPreview;
   faucetStatus: FaucetStatus;
   deployStatus: PQActionStatus;
   pqTxStatus: PQActionStatus;
@@ -98,30 +88,36 @@ interface SnapshotState {
   pqRotateReceipt?: QubitorDevPQRotationReceipt;
 }
 
-function env(name: string): string | undefined {
-  const proc = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process;
-  return INLINE_ENV[name] ?? proc?.env?.[name];
-}
-
 function explicitConfiguredAccountAddress(): Hex | undefined {
-  const configured = env("EXPO_PUBLIC_QUBITOR_ACCOUNT_ADDRESS");
+  const configured = readPublicEnv("EXPO_PUBLIC_QUBITOR_ACCOUNT_ADDRESS");
   return configured?.startsWith("0x") ? (configured as Hex) : undefined;
 }
 
-function configuredAccountAddress(): Hex {
-  return explicitConfiguredAccountAddress() ?? PLACEHOLDER_ADDRESS;
-}
-
 function configuredChainId() {
-  return supportedChainId(env("EXPO_PUBLIC_QUBITOR_CHAIN_ID") ?? MOCK_ACCOUNT.chainId);
+  return configuredQubitorChainId();
 }
 
 function configuredFaucetUrl() {
-  return env("EXPO_PUBLIC_QUBITOR_FAUCET_URL");
+  return readPublicEnv("EXPO_PUBLIC_QUBITOR_FAUCET_URL");
 }
 
 function configuredPQRelayerUrl() {
-  return env("EXPO_PUBLIC_QUBITOR_PQ_RELAYER_URL");
+  return readPublicEnv("EXPO_PUBLIC_QUBITOR_PQ_RELAYER_URL");
+}
+
+function buildAccount(chainId: number, address: Hex, deployed = false, mode: SecurityMode = "PQ Native"): QubitorAccount {
+  return {
+    label: "Quanta Account",
+    address,
+    chainId,
+    deployed,
+    security: {
+      mode,
+      recovery: mode === "PQ Native" ? "active" : "missing",
+      rotationRecommended: false,
+      pqLayerEnabled: mode === "PQ Native" || mode === "PQ Ready" || mode === "Hybrid Protected",
+    },
+  };
 }
 
 function securityModeFromReadiness(snapshot: AccountReadSnapshot): SecurityMode {
@@ -137,36 +133,66 @@ function securityModeFromReadiness(snapshot: AccountReadSnapshot): SecurityMode 
   ) {
     return mode;
   }
-  return isQubitorNetwork(snapshot.chainId) ? "PQ Native" : MOCK_ACCOUNT.security.mode;
+  return isQubitorNetwork(snapshot.chainId) ? "PQ Native" : "Compatibility Mode";
+}
+
+function tokenForNative(snapshot: AccountReadSnapshot, balanceNative: string): TokenItem[] {
+  return [
+    {
+      symbol: snapshot.nativeCurrencySymbol,
+      name: snapshot.chainName,
+      balance: balanceNative,
+      fiatValue: "Live RPC",
+    },
+  ];
+}
+
+function emptyState(chainId = QUBITOR_TESTNET_CHAIN_ID, preview?: QubitorWalletPreview, error?: string): SnapshotState {
+  const address = preview?.accountAddress ?? explicitConfiguredAccountAddress() ?? PLACEHOLDER_ADDRESS;
+  return {
+    status: error ? "fallback" : "loading",
+    walletStatus: preview ? "read-only-ready" : "no-wallet",
+    walletPreview: preview,
+    faucetStatus: "idle",
+    deployStatus: "idle",
+    pqTxStatus: "idle",
+    pqRotateStatus: "idle",
+    account: buildAccount(chainId, address),
+    accountReady: Boolean(preview || explicitConfiguredAccountAddress()),
+    activeAddress: preview?.accountAddress ?? explicitConfiguredAccountAddress(),
+    balanceWei: undefined,
+    balanceNative: "0.0000",
+    balanceLabel: "— QBT",
+    balanceUsd: "— QBT",
+    tokens: [],
+    activity: [],
+    chainName: "Qubitor Testnet",
+    nativeCurrencySymbol: "QBT",
+    deploymentLabel: preview ? "Counterfactual" : "No wallet",
+    readinessLabel: preview ? "PQ Native Pending Deployment" : "No wallet",
+    error,
+  };
 }
 
 function buildLiveState(
   snapshot: AccountReadSnapshot,
+  preview?: QubitorWalletPreview,
   pqAccount?: QubitorDevPQAccount,
   pqProfile?: QubitorDevPQWalletProfile,
 ): SnapshotState {
   const balanceNative = formatBalanceWei(snapshot.balanceWei);
   const securityMode = securityModeFromReadiness(snapshot);
-  const nativeSymbol = snapshot.nativeCurrencySymbol;
   const pqCurrentPublicKeyCommitment =
     snapshot.qbt?.readiness?.readiness?.pqPublicKeyCommitment ??
     pqProfile?.currentPublicKeyCommitment ??
+    preview?.currentPublicKeyCommitment ??
     pqAccount?.publicKeyCommitment;
-  const account: QubitorAccount = {
-    ...MOCK_ACCOUNT,
-    address: snapshot.address,
-    chainId: snapshot.chainId,
-    deployed: snapshot.deployed,
-    security: {
-      ...MOCK_ACCOUNT.security,
-      mode: securityMode,
-      pqLayerEnabled: securityMode === "PQ Native" || securityMode === "PQ Ready" || MOCK_ACCOUNT.security.pqLayerEnabled,
-      recovery: securityMode === "PQ Native" ? "active" : MOCK_ACCOUNT.security.recovery,
-    },
-  };
+  const account = buildAccount(snapshot.chainId, snapshot.address, snapshot.deployed, securityMode);
 
   return {
     status: "live",
+    walletStatus: pqProfile ? "unlocked" : preview ? "read-only-ready" : "no-wallet",
+    walletPreview: preview,
     faucetStatus: "idle",
     deployStatus: "idle",
     pqTxStatus: "idle",
@@ -176,67 +202,68 @@ function buildLiveState(
     activeAddress: snapshot.address,
     balanceWei: snapshot.balanceWei,
     balanceNative,
-    balanceLabel: `${balanceNative} ${nativeSymbol}`,
-    balanceUsd: `${balanceNative} ${nativeSymbol}`,
+    balanceLabel: `${balanceNative} ${snapshot.nativeCurrencySymbol}`,
+    balanceUsd: `${balanceNative} ${snapshot.nativeCurrencySymbol}`,
     chainName: snapshot.chainName,
-    nativeCurrencySymbol: nativeSymbol,
+    nativeCurrencySymbol: snapshot.nativeCurrencySymbol,
     deploymentLabel: snapshot.deployed ? "Deployed" : "Counterfactual",
-    readinessLabel: snapshot.qbt?.readiness?.securityMode ?? account.security.mode,
+    readinessLabel:
+      snapshot.qbt?.readiness?.securityMode ??
+      snapshot.qbt?.securityMode?.mode ??
+      (snapshot.deployed ? "PQ Native" : "PQ Native Pending Deployment"),
     latestBlock: snapshot.latestBlock.toString(),
     rpcUrl: snapshot.rpcUrl,
     pqAccount,
     pqProfile,
     pqCurrentPublicKeyCommitment,
     activity: [],
-    tokens: MOCK_TOKENS.map((token) =>
-      token.symbol === "QBT"
-        ? {
-            ...token,
-            symbol: nativeSymbol,
-            name: nativeSymbol === "QBT" ? "Qubitor" : token.name,
-            balance: balanceNative,
-            fiatValue: "Live RPC",
-          }
-        : token,
-    ),
+    tokens: tokenForNative(snapshot, balanceNative),
   };
 }
 
-function fallbackState(error?: string): SnapshotState {
+function deploymentRequestFromPreview(preview: QubitorWalletPreview) {
   return {
-    status: error ? "fallback" : "loading",
-    faucetStatus: "idle",
-    deployStatus: "idle",
-    pqTxStatus: "idle",
-    pqRotateStatus: "idle",
-    account: PLACEHOLDER_ACCOUNT,
-    accountReady: false,
-    activeAddress: undefined,
-    balanceWei: undefined,
-    balanceNative: "0.0000",
-    balanceLabel: "— QBT",
-    balanceUsd: "— QBT",
-    tokens: MOCK_TOKENS,
-    activity: MOCK_ACTIVITY,
-    chainName: "Qubitor Testnet",
-    nativeCurrencySymbol: "QBT",
-    deploymentLabel: "Loading",
-    readinessLabel: "Loading",
-    error,
+    publicKey: preview.deploymentPublicKey,
+    salt: preview.deploymentSalt,
+  };
+}
+
+function mergeActionState(nextState: SnapshotState, current: SnapshotState): SnapshotState {
+  return {
+    ...nextState,
+    faucetStatus: current.faucetStatus === "requesting" ? "idle" : current.faucetStatus,
+    faucetReceipt: current.faucetReceipt,
+    deployStatus: current.deployStatus === "requesting" ? "idle" : current.deployStatus,
+    deployReceipt: current.deployReceipt,
+    pqTxStatus: current.pqTxStatus === "requesting" ? "idle" : current.pqTxStatus,
+    pqTxReceipt: current.pqTxReceipt,
+    pqRotateStatus: current.pqRotateStatus === "requesting" ? "idle" : current.pqRotateStatus,
+    pqRotateReceipt: current.pqRotateReceipt,
   };
 }
 
 export function useAccountSnapshot() {
   const [reloadKey, setReloadKey] = useState(0);
-  const [state, setState] = useState<SnapshotState>(() => fallbackState());
+  const [state, setState] = useState<SnapshotState>(() => emptyState());
   const [chainOverride, setChainOverride] = useState<number | undefined>();
 
-  // Load the user's persisted network choice once.
   useEffect(() => {
     let active = true;
-    getSelectedChainId().then((selected) => {
-      if (active && selected !== undefined) setChainOverride(selected);
-    });
+    getSelectedChainId()
+      .then(async (selected) => {
+        if (!active) return;
+        const envChainId = configuredChainId();
+        const preferred = selected ?? envChainId;
+        const bootState = await getWalletBootStateForAnyChain(preferred);
+        if (!active) return;
+        if (bootState.status !== "no-wallet" && bootState.status !== "error") {
+          if (bootState.chainId !== envChainId) setChainOverride(bootState.chainId);
+          else if (selected !== undefined && selected !== envChainId) await setSelectedChainId(envChainId as SelectableChainId);
+          return;
+        }
+        if (selected !== undefined && selected !== envChainId) setChainOverride(selected);
+      })
+      .catch(() => undefined);
     return () => {
       active = false;
     };
@@ -244,21 +271,16 @@ export function useAccountSnapshot() {
 
   const config = useMemo(() => {
     const envChainId = configuredChainId();
-    // No override → keep the existing env-driven config untouched.
     if (chainOverride === undefined || chainOverride === envChainId) {
       return {
-        address: configuredAccountAddress(),
         chainId: envChainId,
-        rpcUrl: env("EXPO_PUBLIC_QUBITOR_RPC_URL"),
+        rpcUrl: readPublicEnv("EXPO_PUBLIC_QUBITOR_RPC_URL"),
         faucetUrl: configuredFaucetUrl(),
         pqRelayerUrl: configuredPQRelayerUrl(),
       };
     }
-    // Override differs from the env chain → derive every endpoint from the
-    // chain's real defaults so the env RPC (bound to the env chain) isn't reused.
     const chainId = supportedChainId(chainOverride);
     return {
-      address: configuredAccountAddress(),
       chainId,
       rpcUrl: defaultQubitorRpcUrl(chainId),
       faucetUrl: defaultQubitorFaucetUrl(chainId),
@@ -276,12 +298,14 @@ export function useAccountSnapshot() {
   }, []);
 
   const simulateTransfer = useCallback(
-    async (args: { to: Hex; valueWei: bigint; data?: Hex }) =>
-      simulateQubitorTransfer(
-        { from: state.account.address, to: args.to, valueWei: args.valueWei, data: args.data },
+    async (args: { to: Hex; valueWei: bigint; data?: Hex }) => {
+      if (!state.activeAddress) throw new Error("No Quanta Account is available.");
+      return simulateQubitorTransfer(
+        { from: state.activeAddress, to: args.to, valueWei: args.valueWei, data: args.data },
         { chainId: config.chainId, rpcUrl: config.rpcUrl },
-      ),
-    [config.chainId, config.rpcUrl, state.account.address],
+      );
+    },
+    [config.chainId, config.rpcUrl, state.activeAddress],
   );
 
   const requestFaucet = useCallback(async () => {
@@ -296,32 +320,29 @@ export function useAccountSnapshot() {
 
     setState((current) => ({ ...current, faucetStatus: "requesting", faucetError: undefined }));
     try {
-      const pqProfile = await loadOrCreateQubitorDevPQProfile(config.chainId);
-      const pqAccount = await readQubitorDevPQAccount(
-        qubitorDevnetPQDeploymentRequest(pqProfile),
-        { chainId: config.chainId, pqRelayerUrl: config.pqRelayerUrl },
-      );
+      const preview = await getWalletPreview(config.chainId);
+      if (!preview) throw new Error("Create or restore a Quanta Account before requesting faucet funds.");
       const faucetReceipt = await requestQubitorDevnetFaucet(
-        pqAccount.accountAddress,
+        preview.accountAddress,
         { chainId: config.chainId, faucetUrl: config.faucetUrl },
-        { publicKey: pqProfile.deploymentPublicKey, salt: pqAccount.salt, deployAccount: true },
+        { publicKey: preview.deploymentPublicKey, salt: preview.deploymentSalt, deployAccount: true },
       );
       await rememberQubitorDevPQDeployment({
         chainId: config.chainId,
-        accountAddress: pqAccount.accountAddress,
-        deploymentPublicKey: pqProfile.deploymentPublicKey,
-        deploymentSalt: pqAccount.salt,
-        currentPublicKeyCommitment: pqProfile.currentPublicKeyCommitment ?? pqAccount.publicKeyCommitment,
-      });
+        accountAddress: preview.accountAddress,
+        deploymentPublicKey: preview.deploymentPublicKey,
+        deploymentSalt: preview.deploymentSalt,
+        currentPublicKeyCommitment: preview.currentPublicKeyCommitment,
+      }).catch(() => undefined);
       await recordWalletActivity(
-        { chainId: config.chainId, accountAddress: pqAccount.accountAddress },
+        { chainId: config.chainId, accountAddress: preview.accountAddress },
         {
           type: "receive",
           title: "Faucet funded account",
           detail: `${formatBalanceWei(BigInt(faucetReceipt.amountWei))} QBT`,
           badge: "PQ Native",
           hash: faucetReceipt.hash,
-          to: pqAccount.accountAddress,
+          to: preview.accountAddress,
           asset: "QBT",
           amountLabel: `${formatBalanceWei(BigInt(faucetReceipt.amountWei))} QBT`,
           security: faucetReceipt.signerMode ?? "PQ Native",
@@ -337,7 +358,7 @@ export function useAccountSnapshot() {
         faucetError: error instanceof Error ? error.message : "Faucet request failed.",
       }));
     }
-  }, [config.chainId, config.faucetUrl, config.pqRelayerUrl]);
+  }, [config.chainId, config.faucetUrl]);
 
   const deployPQAccount = useCallback(async () => {
     if (!isQubitorNetwork(config.chainId)) {
@@ -351,17 +372,19 @@ export function useAccountSnapshot() {
 
     setState((current) => ({ ...current, deployStatus: "requesting", deployError: undefined }));
     try {
-      const pqProfile = await loadOrCreateQubitorDevPQProfile(config.chainId);
-      const deployReceipt = await deployQubitorDevPQAccount(
-        qubitorDevnetPQDeploymentRequest(pqProfile),
-        { chainId: config.chainId, faucetUrl: config.faucetUrl, pqRelayerUrl: config.pqRelayerUrl },
-      );
+      const preview = await getWalletPreview(config.chainId);
+      if (!preview) throw new Error("Create or restore a Quanta Account before deploying.");
+      const deployReceipt = await deployQubitorDevPQAccount(deploymentRequestFromPreview(preview), {
+        chainId: config.chainId,
+        faucetUrl: config.faucetUrl,
+        pqRelayerUrl: config.pqRelayerUrl,
+      });
       await rememberQubitorDevPQDeployment({
         chainId: config.chainId,
         accountAddress: deployReceipt.accountAddress,
-        deploymentPublicKey: pqProfile.deploymentPublicKey,
-        deploymentSalt: pqProfile.deploymentSalt,
-      });
+        deploymentPublicKey: preview.deploymentPublicKey,
+        deploymentSalt: preview.deploymentSalt,
+      }).catch(() => undefined);
       if (deployReceipt.transactionHash) {
         await recordWalletActivity(
           { chainId: config.chainId, accountAddress: deployReceipt.accountAddress },
@@ -391,19 +414,23 @@ export function useAccountSnapshot() {
     async (args?: { target?: Hex; valueWei?: string | bigint; data?: Hex }) => {
       if (!isQubitorNetwork(config.chainId)) {
         const pqError = new Error("PQ transfer is only available on Qubitor PQ-native networks.");
-        setState((current) => ({
-          ...current,
-          pqTxStatus: "error",
-          pqTxError: pqError.message,
-        }));
+        setState((current) => ({ ...current, pqTxStatus: "error", pqTxError: pqError.message }));
+        throw pqError;
+      }
+      if (!args?.target || args.valueWei === undefined) {
+        const pqError = new Error("Recipient and amount are required before signing.");
+        setState((current) => ({ ...current, pqTxStatus: "error", pqTxError: pqError.message }));
         throw pqError;
       }
 
       setState((current) => ({ ...current, pqTxStatus: "requesting", pqTxError: undefined }));
       try {
-        const pqProfile = await loadOrCreateQubitorDevPQProfile(config.chainId);
+        const pqProfile = requireUnlockedWalletProfile(config.chainId);
         const pqAccount = await readQubitorDevPQAccount(
-          qubitorDevnetPQDeploymentRequest(pqProfile),
+          {
+            publicKey: pqProfile.deploymentPublicKey,
+            salt: pqProfile.deploymentSalt,
+          },
           { chainId: config.chainId, pqRelayerUrl: config.pqRelayerUrl },
         );
         await rememberQubitorDevPQDeployment({
@@ -413,13 +440,10 @@ export function useAccountSnapshot() {
           deploymentSalt: pqAccount.salt,
           currentPublicKeyCommitment: pqProfile.currentPublicKeyCommitment ?? pqAccount.publicKeyCommitment,
         });
-        const target = args?.target ?? "0x000000000000000000000000000000000000dEaD";
-        const valueWei = args?.valueWei ?? "1000000000000000";
-        const data = args?.data ?? "0x";
         const transfer = await sendQubitorDevnetWalletPQTransfer(
           pqProfile,
           { chainId: config.chainId, rpcUrl: config.rpcUrl, faucetUrl: config.faucetUrl, pqRelayerUrl: config.pqRelayerUrl },
-          { target, valueWei, data },
+          { target: args.target, valueWei: args.valueWei, data: args.data ?? "0x" },
         );
         const pqTxReceipt = transfer.receipt;
         await recordWalletActivity(
@@ -457,39 +481,26 @@ export function useAccountSnapshot() {
   const rotatePQKey = useCallback(async () => {
     if (!isQubitorNetwork(config.chainId)) {
       const pqError = new Error("PQ key rotation is only available on Qubitor PQ-native networks.");
-      setState((current) => ({
-        ...current,
-        pqRotateStatus: "error",
-        pqRotateError: pqError.message,
-      }));
+      setState((current) => ({ ...current, pqRotateStatus: "error", pqRotateError: pqError.message }));
       throw pqError;
     }
 
     setState((current) => ({ ...current, pqRotateStatus: "requesting", pqRotateError: undefined }));
     try {
-      const pqProfile = await loadOrCreateQubitorDevPQProfile(config.chainId);
+      const pqProfile = requireUnlockedWalletProfile(config.chainId);
       const pqAccount = await readQubitorDevPQAccount(
-        qubitorDevnetPQDeploymentRequest(pqProfile),
+        {
+          publicKey: pqProfile.deploymentPublicKey,
+          salt: pqProfile.deploymentSalt,
+        },
         { chainId: config.chainId, pqRelayerUrl: config.pqRelayerUrl },
       );
-      await rememberQubitorDevPQDeployment({
-        chainId: config.chainId,
-        accountAddress: pqAccount.accountAddress,
-        deploymentPublicKey: pqProfile.deploymentPublicKey,
-        deploymentSalt: pqAccount.salt,
-        currentPublicKeyCommitment: pqProfile.currentPublicKeyCommitment ?? pqAccount.publicKeyCommitment,
-      });
-      if (!pqAccount.deployed) {
-        throw new Error("Deploy the Qubitor Account before rotating its PQ key.");
-      }
+      if (!pqAccount.deployed) throw new Error("Deploy the Qubitor Account before rotating its PQ key.");
 
       const nextKey = await generateQubitorDevPQKey();
       const gasKey = qubitorDevnetPQNativeGasKey(pqProfile);
       const authorization = await readQubitorDevPQRotateAuthorization(
-        {
-          accountAddress: pqAccount.accountAddress,
-          newPublicKey: nextKey.publicKey,
-        },
+        { accountAddress: pqAccount.accountAddress, newPublicKey: nextKey.publicKey },
         { chainId: config.chainId, rpcUrl: config.rpcUrl },
       );
       const signature = signQubitorPQAccountAuthorization(authorization.message, pqProfile.currentKey.privateKey);
@@ -549,15 +560,27 @@ export function useAccountSnapshot() {
     setState((current) => ({ ...current, status: "loading", error: undefined }));
 
     async function readLiveState() {
-      let pqProfile = isQubitorNetwork(config.chainId) ? await loadOrCreateQubitorDevPQProfile(config.chainId) : undefined;
-      const pqAccount = pqProfile
-        ? await readQubitorDevPQAccount(qubitorDevnetPQDeploymentRequest(pqProfile), {
-            chainId: config.chainId,
-            pqRelayerUrl: config.pqRelayerUrl,
-          }).catch(() => undefined)
-        : undefined;
+      const bootState = await getWalletBootStateForAnyChain(config.chainId);
+      if (bootState.status === "error") throw new Error(bootState.error);
+      if (bootState.status !== "no-wallet" && bootState.chainId !== config.chainId) {
+        if (!cancelled) setChainOverride(bootState.chainId);
+        throw new Error("Switching to the network that contains your Quanta Account.");
+      }
+      const preview = "preview" in bootState ? bootState.preview : undefined;
+      const configuredAddress = explicitConfiguredAccountAddress();
+      const address = preview?.accountAddress ?? configuredAddress;
+      if (!address) throw new Error("No Quanta Account profile found. Create or restore a wallet first.");
+
+      const pqProfile = getUnlockedWalletProfile(config.chainId);
+      const pqAccount =
+        preview && isQubitorNetwork(config.chainId)
+          ? await readQubitorDevPQAccount(deploymentRequestFromPreview(preview), {
+              chainId: config.chainId,
+              pqRelayerUrl: config.pqRelayerUrl,
+            }).catch(() => undefined)
+          : undefined;
       if (pqProfile && pqAccount) {
-        pqProfile = await rememberQubitorDevPQDeployment({
+        await rememberQubitorDevPQDeployment({
           chainId: config.chainId,
           accountAddress: pqAccount.accountAddress,
           deploymentPublicKey: pqProfile.deploymentPublicKey,
@@ -565,42 +588,40 @@ export function useAccountSnapshot() {
           currentPublicKeyCommitment: pqProfile.currentPublicKeyCommitment ?? pqAccount.publicKeyCommitment,
         });
       }
-      const address = pqAccount?.accountAddress ?? pqProfile?.accountAddress ?? explicitConfiguredAccountAddress();
-      if (!address) throw new Error("Still deriving your Quanta Account address.");
       const snapshot = await readAccountSnapshot(address, { chainId: config.chainId, rpcUrl: config.rpcUrl });
-      const nextState = buildLiveState(snapshot, pqAccount, pqProfile);
+      const nextState = buildLiveState(snapshot, preview, pqAccount, pqProfile);
       return {
         ...nextState,
+        walletStatus: bootState.status === "read-only-ready" && pqProfile ? "unlocked" : nextState.walletStatus,
         activity: await readWalletActivity({ chainId: config.chainId, accountAddress: address }),
       };
     }
 
     readLiveState()
       .then((nextState) => {
-        if (!cancelled) {
-          setState((current) => ({
-            ...nextState,
-            faucetStatus: current.faucetStatus === "requesting" ? "idle" : current.faucetStatus,
-            faucetReceipt: current.faucetReceipt,
-            deployStatus: current.deployStatus === "requesting" ? "idle" : current.deployStatus,
-            deployReceipt: current.deployReceipt,
-            pqTxStatus: current.pqTxStatus === "requesting" ? "idle" : current.pqTxStatus,
-            pqTxReceipt: current.pqTxReceipt,
-            pqRotateStatus: current.pqRotateStatus === "requesting" ? "idle" : current.pqRotateStatus,
-            pqRotateReceipt: current.pqRotateReceipt,
-          }));
-        }
+        if (!cancelled) setState((current) => mergeActionState(nextState, current));
       })
-      .catch((error) => {
+      .catch(async (error) => {
         if (cancelled) return;
         const message = error instanceof Error ? error.message : "RPC read failed.";
-        setState(fallbackState(message));
+        const preview = await getWalletPreview(config.chainId).catch(() => undefined);
+        setState((current) => ({
+          ...emptyState(config.chainId, preview, message),
+          faucetStatus: current.faucetStatus,
+          deployStatus: current.deployStatus,
+          pqTxStatus: current.pqTxStatus,
+          pqRotateStatus: current.pqRotateStatus,
+          faucetReceipt: current.faucetReceipt,
+          deployReceipt: current.deployReceipt,
+          pqTxReceipt: current.pqTxReceipt,
+          pqRotateReceipt: current.pqRotateReceipt,
+        }));
       });
 
     return () => {
       cancelled = true;
     };
-  }, [config.address, config.chainId, config.pqRelayerUrl, config.rpcUrl, reloadKey]);
+  }, [config.chainId, config.pqRelayerUrl, config.rpcUrl, reloadKey]);
 
   return {
     ...state,

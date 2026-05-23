@@ -38,6 +38,7 @@ export default function Settings() {
       const walletKeys = keys.filter((k) => k.startsWith("quanta.wallet."));
       if (walletKeys.length > 0) await AsyncStorage.multiRemove(walletKeys);
       setResetDone(true);
+      router.replace("/onboarding/welcome");
     } finally {
       setResetting(false);
     }

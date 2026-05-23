@@ -18,32 +18,22 @@ import { SettingsRow } from "@/components/SettingsRow";
 import { WarningCard } from "@/components/WarningCard";
 import { Button } from "@/components/Button";
 import { SegmentedBar } from "@/components/SegmentedBar";
-import { useMockState } from "@/hooks/useMockState";
 import { readinessScore } from "@qubitor/core";
 import { colors } from "@qubitor/ui-tokens";
-import { DebugOnly } from "@/components/DebugOnly";
 import { useAccountSnapshot } from "@/hooks/useAccountSnapshot";
-
-const STATES = [
-  "Smart Account Ready",
-  "Hybrid Protected",
-  "PQ Ready",
-  "PQ Native",
-  "Recovery missing",
-  "Rotation recommended",
-] as const;
 
 /** Source: SWallet `Setting.png` (rows with colored icons) + `Wallet analytics.png` (top hero card). */
 export default function SecurityCenter() {
-  const { variant, cycle } = useMockState(STATES, "Hybrid Protected");
   const snapshot = useAccountSnapshot();
   const account = snapshot.account;
   const score = readinessScore(account.security);
   const keyRotationDetail = snapshot.isQubitorDevnet
     ? snapshot.pqRotateStatus === "requesting"
       ? "Rotating ML-DSA key"
-      : `ML-DSA key v${snapshot.pqProfile?.keyVersion ?? 1}`
-    : "Last rotated 32 days ago";
+      : snapshot.walletStatus === "unlocked"
+        ? `ML-DSA key v${snapshot.pqProfile?.keyVersion ?? snapshot.walletPreview?.keyVersion ?? 1}`
+        : "Unlock to manage ML-DSA key"
+    : "Unavailable";
 
   return (
     <PageContainer>
@@ -77,11 +67,15 @@ export default function SecurityCenter() {
           </View>
         </View>
 
-        {variant === "Recovery missing" ? (
-          <WarningCard severity="warning" title="Recovery not configured" detail="Add a recovery method before moving significant funds." />
+        {snapshot.status === "fallback" ? (
+          <WarningCard
+            severity="warning"
+            title="Network state unavailable"
+            detail={snapshot.error ?? "The wallet is showing locally stored account metadata."}
+          />
         ) : null}
-        {variant === "Rotation recommended" ? (
-          <WarningCard severity="review" title="Rotation recommended" detail="Your authorization keys are due for rotation." />
+        {snapshot.walletStatus !== "unlocked" ? (
+          <WarningCard severity="review" title="Wallet locked" detail="Unlock before exporting backups, rotating keys, or signing." />
         ) : null}
 
         <View>
@@ -96,7 +90,7 @@ export default function SecurityCenter() {
             Icon={KeyRound}
             iconColor="orange"
             label="Recovery"
-            detail="3 of 5 guardians"
+            detail="Encrypted Recovery Kit"
             onPress={() => router.push("/recovery")}
           />
           <SettingsRow
@@ -110,21 +104,21 @@ export default function SecurityCenter() {
             Icon={AppWindow}
             iconColor="gray"
             label="Connected Apps"
-            detail="3 active sessions"
+            detail="0 active sessions"
             onPress={() => router.push("/(tabs)/apps")}
           />
           <SettingsRow
             Icon={AlertTriangle}
             iconColor="orange"
             label="Approval Risk"
-            detail="2 to review"
+            detail="No live approvals indexed"
             onPress={() => router.push("/(tabs)/apps")}
           />
           <SettingsRow
             Icon={Activity}
             iconColor="green"
             label="Bridge Readiness"
-            detail={snapshot.isQubitorDevnet ? "Qubitor Devnet" : "Hybrid"}
+            detail="Coming soon"
             onPress={() => router.push("/bridge")}
           />
           <SettingsRow
@@ -141,14 +135,6 @@ export default function SecurityCenter() {
             detail="Network, security, reset wallet"
             onPress={() => router.push("/settings" as Href)}
           />
-        </View>
-
-        <View className="items-center">
-          <DebugOnly>
-          <Button variant="tertiary" onPress={cycle}>
-            State: {variant}
-          </Button>
-          </DebugOnly>
         </View>
       </View>
     </PageContainer>

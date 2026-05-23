@@ -57,8 +57,9 @@ export default function Recovery() {
 
   const hasBackup = Boolean(lastBackupAt);
   const pqKeyVersion = snapshot.pqProfile?.keyVersion ?? 1;
+  const walletUnlocked = snapshot.walletStatus === "unlocked";
   const canRotatePQ =
-    snapshot.isQubitorDevnet && snapshot.account.deployed && snapshot.pqRotateStatus !== "requesting";
+    walletUnlocked && snapshot.isQubitorDevnet && snapshot.account.deployed && snapshot.pqRotateStatus !== "requesting";
   const rotatePQ = () => {
     void snapshot.rotatePQKey().catch(() => undefined);
   };
@@ -180,6 +181,13 @@ export default function Recovery() {
             detail="Set a backup passcode below and export the encrypted kit. Store it somewhere only you control."
           />
         ) : null}
+        {!walletUnlocked ? (
+          <WarningCard
+            severity="review"
+            title="Unlock required"
+            detail="Unlock before exporting Recovery Kits, restoring keys, or rotating the ML-DSA key."
+          />
+        ) : null}
         {snapshot.isQubitorDevnet && !snapshot.account.deployed ? (
           <WarningCard
             severity="review"
@@ -258,6 +266,13 @@ export default function Recovery() {
               <Button onPress={rotatePQ} disabled={!canRotatePQ}>
                 {snapshot.pqRotateStatus === "requesting" ? "Rotating PQ Key" : "Rotate PQ Key"}
               </Button>
+              {!walletUnlocked ? (
+                <View className="mt-3">
+                  <Button variant="secondary" onPress={() => router.push("/unlock")}>
+                    Unlock Wallet
+                  </Button>
+                </View>
+              ) : null}
             </View>
           </Card>
         ) : null}
@@ -289,7 +304,12 @@ export default function Recovery() {
                 className="flex-1"
                 variant="secondary"
                 onPress={exportBackup}
-                disabled={backupPasscode.length < 8 || backupStatus === "exporting" || backupStatus === "restoring"}
+                disabled={
+                  !walletUnlocked ||
+                  backupPasscode.length < 8 ||
+                  backupStatus === "exporting" ||
+                  backupStatus === "restoring"
+                }
               >
                 {backupStatus === "exporting" ? "Exporting" : "Export Encrypted"}
               </Button>
@@ -298,6 +318,7 @@ export default function Recovery() {
                 variant="secondary"
                 onPress={restorePreview ? confirmRestoreBackup : reviewRestoreBackup}
                 disabled={
+                  !walletUnlocked ||
                   !restorePayload.trim() ||
                   backupPasscode.length < 8 ||
                   backupStatus === "exporting" ||

@@ -1,6 +1,6 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import type { Hex } from "@qubitor/core";
-import type { ActivityItem } from "@/lib/mockData";
+import type { ActivityItem } from "@/lib/runtimeTypes";
 
 const ACTIVITY_STORAGE_PREFIX = "quanta.wallet.activity.v1";
 const MAX_ACTIVITY_ITEMS = 40;

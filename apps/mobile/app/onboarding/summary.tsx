@@ -9,16 +9,12 @@ import { Button } from "@/components/Button";
 import { Row } from "@/components/Row";
 import { WarningCard } from "@/components/WarningCard";
 import { AddressDisplay } from "@/components/AddressDisplay";
-import { useMockState } from "@/hooks/useMockState";
-import { DebugOnly } from "@/components/DebugOnly";
 import { useAccountSnapshot } from "@/hooks/useAccountSnapshot";
 
-const STATES = ["Recovery configured", "Recovery skipped"] as const;
-
 export default function SetupSummary() {
-  const { variant, cycle } = useMockState(STATES);
   const snapshot = useAccountSnapshot();
   const { account } = snapshot;
+
   return (
     <PageContainer>
       <PageHeader title="You're all set" />
@@ -44,33 +40,20 @@ export default function SetupSummary() {
             )}
           </View>
           <View className="mt-4">
-            <Row
-              label="Recovery"
-              value={variant === "Recovery configured" ? "Active" : "Skipped"}
-              showChevron={false}
-            />
-            <Row label="Validation" value="Hybrid signature" showChevron={false} last />
+            <Row label="Recovery" value="Recovery Kit not exported yet" showChevron={false} />
+            <Row label="Validation" value="ML-DSA PQ signature" showChevron={false} last />
           </View>
         </Card>
-        {variant === "Recovery skipped" ? (
-          <WarningCard
-            severity="review"
-            title="Recovery not configured"
-            detail="Add a recovery method before moving significant funds."
-          />
-        ) : null}
+        <WarningCard
+          severity="review"
+          title="Export a Recovery Kit next"
+          detail="The wallet is created. Export an encrypted Recovery Kit before moving significant funds."
+        />
         <View className="flex-1" />
         <View className="items-center">
           <Button onPress={() => router.replace("/(tabs)/home")} disabled={!snapshot.accountReady}>
             Continue to Home
           </Button>
-        </View>
-        <View className="items-center">
-          <DebugOnly>
-          <Button variant="tertiary" onPress={cycle}>
-            State: {variant}
-          </Button>
-          </DebugOnly>
         </View>
       </View>
     </PageContainer>

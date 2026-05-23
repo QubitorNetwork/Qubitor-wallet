@@ -11,7 +11,7 @@ import { WarningCard } from "@/components/WarningCard";
 import { Button } from "@/components/Button";
 import { explorerTxUrl, openExternalUrl } from "@/lib/externalActions";
 import { colors } from "@qubitor/ui-tokens";
-import type { ActivityItem } from "@/lib/mockData";
+import type { ActivityItem } from "@/lib/runtimeTypes";
 import { useAccountSnapshot } from "@/hooks/useAccountSnapshot";
 import type { WalletActivityItem } from "@/lib/walletActivity";
 

@@ -11,6 +11,7 @@ import { AddressDisplay } from "@/components/AddressDisplay";
 import { HeroCard } from "@/components/HeroCard";
 import { TokenChip } from "@/components/TokenChip";
 import { Row } from "@/components/Row";
+import { Button } from "@/components/Button";
 import { useAccountSnapshot } from "@/hooks/useAccountSnapshot";
 import { readinessScore } from "@qubitor/core";
 import { colors } from "@qubitor/ui-tokens";
@@ -25,6 +26,7 @@ export default function Home() {
   const live = snapshot.status === "live";
   const loading = snapshot.status === "loading";
   const accountReady = snapshot.accountReady;
+  const walletUnlocked = snapshot.walletStatus === "unlocked";
   const balanceIsZero = (snapshot.balanceWei ?? 0n) === 0n;
 
   return (
@@ -119,6 +121,18 @@ export default function Home() {
             title="Offline — showing last known state"
             detail={snapshot.error ?? "Couldn't reach the Qubitor RPC. Check your network or RPC URL."}
           />
+        ) : null}
+        {accountReady && !walletUnlocked ? (
+          <View className="gap-3">
+            <WarningCard
+              severity="info"
+              title="Wallet locked"
+              detail="Balance and address are loaded from the encrypted profile preview. Unlock when you need to sign."
+            />
+            <Button size="block" variant="secondary" onPress={() => router.push("/unlock")}>
+              Unlock Wallet
+            </Button>
+          </View>
         ) : null}
         {account.security.recovery !== "active" ? (
           <WarningCard

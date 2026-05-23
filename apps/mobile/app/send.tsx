@@ -45,6 +45,7 @@ export default function Send() {
   const insufficientFunds =
     parsedAmountWei !== undefined && snapshot.balanceWei !== undefined && parsedAmountWei > snapshot.balanceWei;
   const accountReady = snapshot.accountReady && snapshot.status === "live";
+  const walletUnlocked = snapshot.walletStatus === "unlocked";
 
   useEffect(() => {
     setAsset((current) => (current === "QBT" ? snapshot.nativeCurrencySymbol : current));
@@ -80,7 +81,13 @@ export default function Send() {
   const wouldRevert = sim ? !sim.willSucceed : false;
   const simInsufficient = sim?.insufficientFunds ?? false;
   const canReview =
-    accountReady && recipientValid && parsedAmountWei !== undefined && !insufficientFunds && !wouldRevert && !simInsufficient;
+    accountReady &&
+    walletUnlocked &&
+    recipientValid &&
+    parsedAmountWei !== undefined &&
+    !insufficientFunds &&
+    !wouldRevert &&
+    !simInsufficient;
 
   return (
     <PageContainer>
@@ -104,6 +111,13 @@ export default function Send() {
             severity="info"
             title="Account is loading"
             detail="Wait for the live Quanta Account address and balance before preparing a transfer."
+          />
+        ) : null}
+        {accountReady && !walletUnlocked ? (
+          <WarningCard
+            severity="review"
+            title="Unlock required"
+            detail="Viewing balance works while locked. Unlock before signing a QBT transfer."
           />
         ) : null}
 
@@ -188,6 +202,13 @@ export default function Send() {
         ) : null}
 
         <View className="items-center mt-2">
+          {accountReady && !walletUnlocked ? (
+            <View className="mb-3 w-full">
+              <Button size="block" variant="secondary" onPress={() => router.push("/unlock")}>
+                Unlock Wallet
+              </Button>
+            </View>
+          ) : null}
           <Button
             onPress={() => {
               router.push({

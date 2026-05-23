@@ -136,7 +136,7 @@ Mobile components live in `apps/mobile/components/`. Extension components in `ap
 | [Sheet](apps/mobile/components/Sheet.tsx) | implicit (RN modal pattern) | bottom-anchored | Drag handle + rounded top |
 | [DebugOnly](apps/mobile/components/DebugOnly.tsx) | n/a | passthrough | Renders children only when `EXPO_PUBLIC_QUBITOR_DEBUG=1` |
 
-States exposed by `useMockState`: every screen with multiple brief-listed States cycles them via a tertiary debug button (visible only with the env flag set).
+Production runtime has no `useMockState` or mock account fixtures. State variants for design review live only in docs/screenshots or explicit debug-only tooling behind `EXPO_PUBLIC_QUBITOR_DEBUG=1`; the shipped wallet renders live, empty, locked, loading, or error states only.
 
 ## 3. Per-screen layout
 

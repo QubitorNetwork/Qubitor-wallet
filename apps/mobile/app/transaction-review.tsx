@@ -58,7 +58,8 @@ export default function TransactionReview() {
 
   const willRevert = sim ? !sim.willSucceed : false;
   const insufficient = sim?.insufficientFunds ?? false;
-  const blockConfirm = simulating || willRevert || insufficient || snapshot.pqTxStatus === "requesting";
+  const walletUnlocked = snapshot.walletStatus === "unlocked";
+  const blockConfirm = simulating || willRevert || insufficient || !walletUnlocked || snapshot.pqTxStatus === "requesting";
 
   const simulationValue = simulating
     ? "Simulating…"
@@ -135,6 +136,13 @@ export default function TransactionReview() {
             detail={`${simError}. Review carefully before confirming.`}
           />
         ) : null}
+        {!walletUnlocked ? (
+          <WarningCard
+            severity="review"
+            title="Unlock required"
+            detail="Unlock Quanta Wallet before signing this PQ transaction."
+          />
+        ) : null}
         {snapshot.pqTxStatus === "error" ? (
           <WarningCard
             severity="review"
@@ -179,6 +187,11 @@ export default function TransactionReview() {
           <Button variant="secondary" className="flex-1" onPress={() => router.back()}>
             Reject
           </Button>
+          {!walletUnlocked ? (
+            <Button className="flex-1" onPress={() => router.push("/unlock")}>
+              Unlock
+            </Button>
+          ) : (
           <Button className="flex-1" onPress={confirm} disabled={blockConfirm}>
             {snapshot.pqTxStatus === "requesting"
               ? "Signing PQ"
@@ -186,6 +199,7 @@ export default function TransactionReview() {
                 ? "Simulating"
                 : "Confirm"}
           </Button>
+          )}
         </View>
       </View>
     </PageContainer>

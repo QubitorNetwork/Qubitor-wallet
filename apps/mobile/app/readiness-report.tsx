@@ -20,9 +20,8 @@ export default function ReadinessReport() {
   const account = snapshot.account;
   const score = readinessScore(account.security);
   const segments = [
-    { value: 60, color: colors.hero.green, label: "Protected" },
-    { value: 25, color: colors.badge.review, label: "Partially protected" },
-    { value: 15, color: colors.warningStrong, label: "Legacy / external" },
+    { value: score, color: colors.hero.green, label: "PQ coverage" },
+    { value: Math.max(0, 100 - score), color: colors.warningStrong, label: "Needs attention" },
   ];
 
   return (
@@ -66,11 +65,11 @@ export default function ReadinessReport() {
               detail={`Active on ${snapshot.chainName}`}
               showChevron={false}
             />
-            <Row label="Recovery" value="3 of 5 guardians" showChevron={false} />
+            <Row label="Recovery" value="Encrypted Recovery Kit" showChevron={false} />
             <Row label="Network" value={snapshot.chainName} showChevron={false} />
             <Row
               label="External dependencies"
-              value="No ECDSA account control"
+              value="No ECDSA account control in wallet runtime"
               detail="Default Quanta Accounts require PQ authorization"
               showChevron={false}
               last
@@ -84,13 +83,8 @@ export default function ReadinessReport() {
           </Text>
           <Card>
             <Row
-              label="Tighten QubiSwap permissions"
-              detail="Compatibility mode active"
-              onPress={() => router.push("/(tabs)/apps")}
-            />
-            <Row
-              label="Test recovery"
-              detail="Last tested 12 days ago"
+              label="Export Recovery Kit"
+              detail="Create an encrypted backup before storing significant QBT"
               onPress={() => router.push("/recovery")}
               last
             />
