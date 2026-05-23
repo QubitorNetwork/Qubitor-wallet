@@ -28,39 +28,43 @@ window.addEventListener("message", (event: MessageEvent<ProviderBridgeRequest>) 
   if (data?.source !== "qubitor:provider") return;
   if (data.kind !== "request" || !data.requestId || !data.method || !data.origin) return;
 
-  chrome.runtime.sendMessage(
-    {
-      kind: "qubitor:provider-request",
-      requestId: data.requestId,
-      origin: data.origin,
-      method: data.method,
-      params: data.params ?? [],
-    },
-    (response) => {
-      if (chrome.runtime.lastError) {
-        window.postMessage(
-          {
-            source: "qubitor:provider-response",
-            requestId: data.requestId,
-            error: {
-              code: 5000,
-              message: chrome.runtime.lastError.message ?? "Qubitor extension relay failed.",
-            },
-          },
-          "*",
-        );
-        return;
-      }
+  const port = chrome.runtime.connect({ name: "qubitor:provider" });
+  let settled = false;
 
-      window.postMessage(
-        {
-          source: "qubitor:provider-response",
-          requestId: data.requestId,
-          result: response?.result,
-          error: response?.error,
+  port.onMessage.addListener((response) => {
+    if (response?.source !== "qubitor:provider-response" || response.requestId !== data.requestId) return;
+    settled = true;
+    window.postMessage(
+      {
+        source: "qubitor:provider-response",
+        requestId: data.requestId,
+        result: response.result,
+        error: response.error,
+      },
+      "*",
+    );
+  });
+
+  port.onDisconnect.addListener(() => {
+    if (settled) return;
+    window.postMessage(
+      {
+        source: "qubitor:provider-response",
+        requestId: data.requestId,
+        error: {
+          code: 5000,
+          message: chrome.runtime.lastError?.message ?? "Qubitor extension request channel closed.",
         },
-        "*",
-      );
-    },
-  );
+      },
+      "*",
+    );
+  });
+
+  port.postMessage({
+    kind: "qubitor:provider-request",
+    requestId: data.requestId,
+    origin: data.origin,
+    method: data.method,
+    params: data.params ?? [],
+  });
 });

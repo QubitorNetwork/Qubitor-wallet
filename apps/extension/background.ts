@@ -10,9 +10,15 @@
  * transactions.
  */
 
-import { QUBITOR_TESTNET_CHAIN_ID, defaultQubitorRpcUrl, supportedChainId } from "@qubitor/evm";
+import {
+  QUBITOR_TESTNET_CHAIN_ID,
+  QUBITOR_ZERO_HASH,
+  defaultQubitorRpcUrl,
+  deriveQubitorPQAccountAddress,
+  supportedChainId,
+} from "@qubitor/evm";
 import { getAddress, isHex, type Hex } from "viem";
-import { unlockExtensionWalletProfile } from "./lib/extensionWalletVault";
+import { createExtensionWalletProfile, unlockExtensionWalletProfile } from "./lib/extensionWalletVault";
 import { sendExtensionDappTransaction } from "./lib/extensionWalletRuntime";
 
 const env = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env;
@@ -50,7 +56,10 @@ interface StoredConnection {
 }
 
 interface ExtensionWalletRecordPreview {
+  chainId?: number;
   accountAddress?: string;
+  deploymentPublicKey?: Hex;
+  deploymentSalt?: Hex;
 }
 
 interface ExtensionWalletRecord {
@@ -166,8 +175,24 @@ async function currentAccountAddress(): Promise<string | undefined> {
   if (env?.PLASMO_PUBLIC_QUBITOR_ACCOUNT_ADDRESS?.startsWith("0x")) {
     return env.PLASMO_PUBLIC_QUBITOR_ACCOUNT_ADDRESS;
   }
-  const previewAddress = (await getExtensionWalletRecord())?.preview?.accountAddress;
-  return previewAddress?.startsWith("0x") ? previewAddress : undefined;
+  const preview = (await getExtensionWalletRecord())?.preview;
+  const previewAddress = preview?.accountAddress;
+  if (previewAddress?.startsWith("0x")) return previewAddress;
+  if (!preview?.deploymentPublicKey) return undefined;
+
+  try {
+    return deriveQubitorPQAccountAddress(preview.deploymentPublicKey, preview.deploymentSalt ?? QUBITOR_ZERO_HASH);
+  } catch {
+    return undefined;
+  }
+}
+
+async function getOrCreateAccountAddress(passcode?: string): Promise<string | undefined> {
+  const current = await currentAccountAddress();
+  if (current) return current;
+  if (!passcode) return undefined;
+  await createExtensionWalletProfile(passcode);
+  return currentAccountAddress();
 }
 
 async function connectedAccountResult(origin: string): Promise<string[]> {
@@ -399,9 +424,9 @@ async function resolvePendingRequest(message: ResolveRequestMessage): Promise<{ 
 
   try {
     if (pending.method === "eth_requestAccounts") {
-      const account = await currentAccountAddress();
+      const account = await getOrCreateAccountAddress(message.passcode);
       if (!account) {
-        throw new Error("Create or unlock Quanta Wallet before connecting this site.");
+        throw new Error("Create or restore Quanta Wallet before connecting this site.");
       }
       await setConnection(
         pending.origin,
@@ -413,9 +438,9 @@ async function resolvePendingRequest(message: ResolveRequestMessage): Promise<{ 
     }
 
     if (pending.method === "wallet_requestPermissions") {
-      const account = await currentAccountAddress();
+      const account = await getOrCreateAccountAddress(message.passcode);
       if (!account) {
-        throw new Error("Create or unlock Quanta Wallet before connecting this site.");
+        throw new Error("Create or restore Quanta Wallet before connecting this site.");
       }
       await setConnection(
         pending.origin,
@@ -467,6 +492,49 @@ async function resolvePendingRequest(message: ResolveRequestMessage): Promise<{ 
 
 chrome.runtime.onInstalled.addListener(() => {
   console.log("[qubitor] extension installed");
+});
+
+function postProviderResponse(
+  port: chrome.runtime.Port,
+  requestId: string,
+  response: ProviderResponse,
+  disconnect = true,
+) {
+  try {
+    port.postMessage({
+      source: "qubitor:provider-response",
+      requestId,
+      result: response.result,
+      error: response.error,
+    });
+  } finally {
+    if (disconnect) port.disconnect();
+  }
+}
+
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name !== "qubitor:provider") return;
+  let activeRequestId: string | undefined;
+  let responded = false;
+
+  const respondFromPort = (requestId: string) => (response: ProviderResponse) => {
+    if (responded) return;
+    responded = true;
+    pendingRequests.delete(requestId);
+    postProviderResponse(port, requestId, response);
+  };
+
+  port.onMessage.addListener((message) => {
+    if (message?.kind !== "qubitor:provider-request" || !message.requestId) return;
+    activeRequestId = message.requestId as string;
+    void handleProviderRequest(message as ProviderRequestMessage, respondFromPort(activeRequestId));
+  });
+
+  port.onDisconnect.addListener(() => {
+    if (!responded && activeRequestId) {
+      pendingRequests.delete(activeRequestId);
+    }
+  });
 });
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {

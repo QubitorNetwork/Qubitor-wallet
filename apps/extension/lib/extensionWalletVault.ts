@@ -38,6 +38,7 @@ export interface ExtensionPQWalletPreview {
   chainId: number;
   accountAddress?: Hex;
   deploymentPublicKey: Hex;
+  deploymentSalt: Hex;
   currentPublicKeyCommitment?: Hex;
   keyVersion: number;
   lastRotationAt?: string;
@@ -92,6 +93,7 @@ function previewFromProfile(profile: ExtensionPQWalletProfile): ExtensionPQWalle
     chainId: profile.chainId,
     accountAddress: profile.accountAddress,
     deploymentPublicKey: profile.deploymentPublicKey,
+    deploymentSalt: profile.deploymentSalt,
     currentPublicKeyCommitment: profile.currentPublicKeyCommitment,
     keyVersion: profile.keyVersion,
     lastRotationAt: profile.lastRotationAt,

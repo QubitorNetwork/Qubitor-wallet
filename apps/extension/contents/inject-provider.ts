@@ -7,9 +7,9 @@ import type { PlasmoCSConfig } from "plasmo";
  * service worker, then resolved after either a read-only response or a user
  * decision in tabs/request.html.
  *
- * Real signing wiring is deferred until QubitorPQTxV1 exists in the node.
- * The extension must not return mock EOA signatures or raw classical
- * transaction hashes.
+ * eth_sendTransaction is reviewed by the extension and submitted through the
+ * Quanta Account PQ transaction path. The extension must not return mock EOA
+ * signatures or raw classical transaction hashes.
  */
 
 export const config: PlasmoCSConfig = {
@@ -50,7 +50,7 @@ function requestThroughRelay(args: RequestArgs): Promise<unknown> {
     const timeout = window.setTimeout(() => {
       window.removeEventListener("message", onResponse);
       reject(new Error(`qubitor provider: ${args.method} timed out`));
-    }, 120_000);
+    }, 600_000);
 
     function onResponse(event: MessageEvent<ProviderBridgeResponse>) {
       if (event.source !== window) return;

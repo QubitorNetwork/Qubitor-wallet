@@ -4,6 +4,7 @@ import { Card } from "../components/Card";
 import { Row } from "../components/Row";
 import { WarningCard } from "../components/WarningCard";
 import type { PendingRequestDetails } from "../tabs/request";
+import { useState } from "react";
 
 function shortAddress(address?: string) {
   return address ? `${address.slice(0, 6)}...${address.slice(-4)}` : "No wallet";
@@ -26,13 +27,15 @@ export function DappConnection({
   error?: string | null;
   verified?: boolean;
   onReject?: () => void;
-  onLimited?: () => void;
-  onConnect?: () => void;
+  onLimited?: (passcode?: string) => void;
+  onConnect?: (passcode?: string) => void;
 }) {
+  const [passcode, setPasscode] = useState("");
   const close = onReject ?? (() => window.close());
   const host = request?.hostname ?? origin ?? appName ?? "Unknown site";
   const account = request?.account;
-  const canConnect = Boolean(account) && !loading;
+  const isCreating = !account;
+  const canConnect = !loading && (Boolean(account) || passcode.length >= 8);
 
   return (
     <div className="min-h-screen bg-background text-text font-sans">
@@ -50,7 +53,7 @@ export function DappConnection({
           <WarningCard
             severity="warning"
             title="No Quanta Account found"
-            detail="Create or restore a Quanta Wallet profile from the extension popup before connecting this site."
+            detail="Enter a new passcode to create this extension's standalone Quanta Account, or restore an existing Recovery Kit from the extension popup."
           />
         ) : null}
 
@@ -69,12 +72,37 @@ export function DappConnection({
           </div>
         </Card>
 
+        {isCreating ? (
+          <Card>
+            <label className="text-xs font-mono uppercase tracking-[0.22em] text-qb-mist" htmlFor="quanta-create-passcode">
+              New wallet passcode
+            </label>
+            <input
+              id="quanta-create-passcode"
+              type="password"
+              value={passcode}
+              onChange={(event) => setPasscode(event.target.value)}
+              className="mt-3 h-12 w-full rounded-md border border-qb-line bg-qb-black px-4 text-qb-bone outline-none focus:border-qb-bone"
+              placeholder="At least 8 characters"
+              autoFocus
+            />
+            <p className="mt-3 text-xs text-qb-mist">
+              The ML-DSA key is encrypted locally in this browser extension. Plaintext keys are not stored.
+            </p>
+          </Card>
+        ) : null}
+
         <div className="space-y-3 pt-2">
-          <Button size="block" onClick={onConnect} disabled={!canConnect}>
-            Connect
+          <Button size="block" onClick={() => onConnect?.(isCreating ? passcode : undefined)} disabled={!canConnect}>
+            {isCreating ? "Create and connect" : "Connect"}
           </Button>
-          <Button variant="secondary" size="block" onClick={onLimited} disabled={!canConnect}>
-            Connect view-only
+          <Button
+            variant="secondary"
+            size="block"
+            onClick={() => onLimited?.(isCreating ? passcode : undefined)}
+            disabled={!canConnect}
+          >
+            {isCreating ? "Create view-only" : "Connect view-only"}
           </Button>
           <Button variant="tertiary" size="block" onClick={close}>
             Reject

@@ -143,8 +143,8 @@ export default function Request() {
       error={error}
       appName={originHost}
       onReject={() => resolve("reject")}
-      onLimited={() => resolve("limited")}
-      onConnect={() => resolve("approve")}
+      onLimited={(passcode) => resolve("limited", passcode)}
+      onConnect={(passcode) => resolve("approve", passcode)}
     />
   );
 }
