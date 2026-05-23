@@ -14,6 +14,27 @@ interface RequestContext {
   method?: string;
 }
 
+export interface PendingRequestDetails {
+  requestId: string;
+  type: RequestType;
+  method: string;
+  origin: string;
+  hostname: string;
+  chainId: number;
+  chainIdHex: string;
+  account?: string;
+  connected: boolean;
+  permissions: string[];
+  params?: unknown[];
+  transaction?: {
+    from?: string;
+    to: string;
+    valueWei: string;
+    data: string;
+  };
+  parseError?: string;
+}
+
 function hostnameFromOrigin(origin?: string): string | undefined {
   if (!origin) return undefined;
   try {
@@ -28,6 +49,9 @@ function hostnameFromOrigin(origin?: string): string | undefined {
  *  replaces classical transaction and message signing for Qubitor dapp flows. */
 export default function Request() {
   const [context, setContext] = useState<RequestContext>({ type: "connect" });
+  const [details, setDetails] = useState<PendingRequestDetails | null>(null);
+  const [loadingDetails, setLoadingDetails] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -41,31 +65,82 @@ export default function Request() {
     });
   }, []);
 
-  const resolve = (decision: Decision) => {
+  useEffect(() => {
+    if (!context.requestId) return;
+    setLoadingDetails(true);
+    chrome.runtime.sendMessage(
+      {
+        kind: "qubitor:get-pending-request",
+        requestId: context.requestId,
+      },
+      (response: { ok?: boolean; request?: PendingRequestDetails; error?: string }) => {
+        setLoadingDetails(false);
+        if (response?.request) {
+          setDetails(response.request);
+          setError(null);
+          return;
+        }
+        setError(response?.error ?? "Qubitor request expired.");
+      },
+    );
+  }, [context.requestId]);
+
+  const resolve = (decision: Decision, passcode?: string) => {
     if (!context.requestId) {
       window.close();
       return;
     }
+    setError(null);
 
     chrome.runtime.sendMessage(
       {
         kind: "qubitor:resolve-request",
         requestId: context.requestId,
         decision,
+        passcode,
       },
-      () => window.close(),
+      (response: { ok?: boolean; error?: string }) => {
+        if (response?.ok) {
+          window.close();
+          return;
+        }
+        setError(response?.error ?? "Could not complete the Qubitor request.");
+      },
     );
   };
 
   const originHost = hostnameFromOrigin(context.origin);
 
-  if (context.type === "tx") return <TransactionReview origin={originHost} onReject={() => resolve("reject")} onApprove={() => resolve("approve")} />;
+  if (context.type === "tx") {
+    return (
+      <TransactionReview
+        origin={originHost}
+        request={details}
+        loading={loadingDetails}
+        error={error}
+        onReject={() => resolve("reject")}
+        onApprove={(passcode) => resolve("approve", passcode)}
+      />
+    );
+  }
   if (context.type === "sign") {
-    return <MessageSigning origin={originHost} onReject={() => resolve("reject")} onApprove={() => resolve("approve")} />;
+    return (
+      <MessageSigning
+        origin={originHost}
+        request={details}
+        loading={loadingDetails}
+        error={error}
+        onReject={() => resolve("reject")}
+        onApprove={(passcode) => resolve("approve", passcode)}
+      />
+    );
   }
   return (
     <DappConnection
       origin={originHost}
+      request={details}
+      loading={loadingDetails}
+      error={error}
       appName={originHost}
       onReject={() => resolve("reject")}
       onLimited={() => resolve("limited")}

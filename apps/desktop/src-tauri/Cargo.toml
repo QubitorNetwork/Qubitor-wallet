@@ -1,6 +1,6 @@
 [package]
 name = "quanta-wallet-desktop"
-version = "0.0.14"
+version = "0.0.15"
 description = "Quanta Wallet desktop"
 authors = ["Qubitor"]
 edition = "2021"

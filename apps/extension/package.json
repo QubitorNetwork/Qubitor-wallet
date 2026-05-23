@@ -1,6 +1,6 @@
 {
   "name": "@qubitor/extension",
-  "version": "0.0.14",
+  "version": "0.0.15",
   "private": true,
   "displayName": "Quanta Wallet",
   "description": "Quanta Wallet browser extension — Qubitor Network smart account with PQ-native validation.",
@@ -15,8 +15,8 @@
     "@qubitor/chain-config": "0.1.1",
     "@qubitor/core": "workspace:*",
     "@qubitor/evm": "workspace:*",
-    "@qubitor/pq-native-tx": "0.1.1",
     "@qubitor/pq-crypto": "workspace:*",
+    "@qubitor/pq-native-tx": "0.1.1",
     "@qubitor/sdk": "0.1.1",
     "@qubitor/ui-tokens": "workspace:*",
     "@qubitor/wallet-policy": "workspace:*",
@@ -28,13 +28,14 @@
     "viem": "^2.21.55"
   },
   "devDependencies": {
-    "@types/qrcode": "^1.5.5",
     "@types/chrome": "^0.0.287",
+    "@types/qrcode": "^1.5.5",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "autoprefixer": "^10.4.20",
     "postcss": "^8.5.0",
     "tailwindcss": "^3.4.16",
+    "tsx": "^4.21.0",
     "typescript": "^5.6.3"
   },
   "manifest": {

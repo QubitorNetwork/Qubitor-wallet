@@ -101,6 +101,16 @@ export async function sendExtensionQbt(
 ) {
   const target = getAddress(args.recipient) as Hex;
   const valueWei = parseNativeAmountToWei(args.amount);
+  return sendExtensionDappTransaction(profile, passcode, { target, valueWei });
+}
+
+export async function sendExtensionDappTransaction(
+  profile: ExtensionPQWalletProfile,
+  passcode: string,
+  args: { target: Hex; valueWei: string | bigint; data?: Hex },
+) {
+  const target = getAddress(args.target) as Hex;
+  const valueWei = BigInt(args.valueWei);
   let pqAccount = await readExtensionPQAccount(profile);
   if (!pqAccount.deployed) {
     await deployExtensionAccount(profile, passcode);
@@ -111,6 +121,7 @@ export async function sendExtensionQbt(
       accountAddress: pqAccount.accountAddress,
       target,
       valueWei,
+      data: args.data,
     },
     { chainId: pqAccount.chainId },
   );
@@ -120,6 +131,7 @@ export async function sendExtensionQbt(
       accountAddress: pqAccount.accountAddress,
       target,
       valueWei,
+      data: args.data,
       nonce: authorization.nonce,
       signature,
       publicKey: profile.deploymentKey.publicKey,
@@ -131,7 +143,7 @@ export async function sendExtensionQbt(
   await rememberExtensionAccount(profile, pqAccount, passcode);
   await recordExtensionActivity({
     type: "send",
-    title: `Sent ${formatBalanceWei(BigInt(receipt.valueWei))} QBT`,
+    title: valueWei > 0n ? `Sent ${formatBalanceWei(valueWei)} QBT` : "Submitted dapp transaction",
     detail: `To ${target.slice(0, 6)}...${target.slice(-4)}`,
     hash: receipt.transactionHash,
     status: receipt.status === "success" ? "success" : "failed",

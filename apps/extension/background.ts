@@ -5,11 +5,15 @@
  * provider event, this opens tabs/request.html?type=... in a popup-shaped
  * window so the user sees the matching modal screen.
  *
- * Qubitor is PQ-native only: classical EOA signing and eth_sendTransaction are
- * disabled until dapps use QubitorPQTxV1-compatible submission.
+ * Qubitor is PQ-native only: eth_sendTransaction requests are reviewed here
+ * and submitted as Quanta Account QubitorPQTxV1 executions, never as raw EOA
+ * transactions.
  */
 
 import { QUBITOR_TESTNET_CHAIN_ID, defaultQubitorRpcUrl, supportedChainId } from "@qubitor/evm";
+import { getAddress, isHex, type Hex } from "viem";
+import { unlockExtensionWalletProfile } from "./lib/extensionWalletVault";
+import { sendExtensionDappTransaction } from "./lib/extensionWalletRuntime";
 
 const env = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env;
 const CHAIN_ID = supportedChainId(env?.PLASMO_PUBLIC_QUBITOR_CHAIN_ID ?? QUBITOR_TESTNET_CHAIN_ID);
@@ -33,6 +37,7 @@ interface ResolveRequestMessage {
   kind: "qubitor:resolve-request";
   requestId: string;
   decision: Decision;
+  passcode?: string;
 }
 
 interface StoredConnection {
@@ -63,7 +68,31 @@ interface ProviderResponse {
 interface PendingRequest {
   method: string;
   origin: string;
+  params?: unknown[];
   respond: (response: ProviderResponse) => void;
+}
+
+interface ParsedTransactionRequest {
+  from?: Hex;
+  to: Hex;
+  valueWei: string;
+  data: Hex;
+}
+
+interface PendingRequestDetails {
+  requestId: string;
+  type: RequestType;
+  method: string;
+  origin: string;
+  hostname: string;
+  chainId: number;
+  chainIdHex: string;
+  account?: string;
+  connected: boolean;
+  permissions: string[];
+  params?: unknown[];
+  transaction?: ParsedTransactionRequest;
+  parseError?: string;
 }
 
 const pendingRequests = new Map<string, PendingRequest>();
@@ -78,6 +107,10 @@ function hostnameFromOrigin(origin: string): string {
 
 function providerError(code: number, message: string): ProviderResponse {
   return { error: { code, message } };
+}
+
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : "Qubitor request failed.";
 }
 
 function requestTypeForMethod(method: string): RequestType | null {
@@ -143,6 +176,10 @@ async function connectedAccountResult(origin: string): Promise<string[]> {
   return account ? [account] : [];
 }
 
+async function readConnection(origin: string): Promise<StoredConnection | undefined> {
+  return (await getConnections())[origin];
+}
+
 async function setConnection(origin: string, permissions: string[]) {
   const connections = await getConnections();
   const existing = connections[origin];
@@ -198,6 +235,7 @@ function openRequestWindow(type: RequestType, request: ProviderRequestMessage, r
   pendingRequests.set(request.requestId, {
     method: request.method,
     origin: request.origin,
+    params: request.params,
     respond,
   });
 
@@ -215,6 +253,66 @@ function openRequestWindow(type: RequestType, request: ProviderRequestMessage, r
       respond(providerError(5000, chrome.runtime.lastError.message ?? "Could not open Qubitor review window."));
     }
   });
+}
+
+function quantityToBigInt(value: unknown, fallback = 0n): bigint {
+  if (typeof value === "bigint") return value;
+  if (typeof value === "number" && Number.isFinite(value)) return BigInt(Math.trunc(value));
+  if (typeof value !== "string" || value.length === 0) return fallback;
+  try {
+    return value.startsWith("0x") ? BigInt(value) : BigInt(value);
+  } catch {
+    throw new Error(`Invalid transaction value: ${value}`);
+  }
+}
+
+function normalizeData(value: unknown): Hex {
+  const data = typeof value === "string" && value.length > 0 ? value : "0x";
+  if (!isHex(data)) throw new Error("Transaction calldata must be 0x-prefixed hex.");
+  return data as Hex;
+}
+
+function parseTransactionRequest(params: unknown[] = []): ParsedTransactionRequest {
+  const tx = params[0] as Record<string, unknown> | undefined;
+  if (!tx || typeof tx !== "object") throw new Error("Missing eth_sendTransaction payload.");
+  if (typeof tx.to !== "string" || !tx.to.startsWith("0x")) {
+    throw new Error("Contract deployment transactions are not supported by Quanta Wallet yet.");
+  }
+  const from = typeof tx.from === "string" && tx.from.startsWith("0x") ? (getAddress(tx.from) as Hex) : undefined;
+  const to = getAddress(tx.to) as Hex;
+  const valueWei = quantityToBigInt(tx.value).toString();
+  const data = normalizeData(tx.data ?? tx.input);
+  return { from, to, valueWei, data };
+}
+
+async function getPendingRequestDetails(requestId: string): Promise<PendingRequestDetails | undefined> {
+  const pending = pendingRequests.get(requestId);
+  if (!pending) return undefined;
+  const type = requestTypeForMethod(pending.method);
+  if (!type) return undefined;
+  const account = await currentAccountAddress();
+  const connection = await readConnection(pending.origin);
+  const details: PendingRequestDetails = {
+    requestId,
+    type,
+    method: pending.method,
+    origin: pending.origin,
+    hostname: hostnameFromOrigin(pending.origin),
+    chainId: CHAIN_ID,
+    chainIdHex: CHAIN_ID_HEX,
+    account,
+    connected: Boolean(connection),
+    permissions: connection?.permissions ?? [],
+    params: pending.params,
+  };
+  if (type === "tx") {
+    try {
+      details.transaction = parseTransactionRequest(pending.params);
+    } catch (error) {
+      details.parseError = messageOf(error);
+    }
+  }
+  return details;
 }
 
 async function handleProviderRequest(message: ProviderRequestMessage, respond: (response: ProviderResponse) => void) {
@@ -269,6 +367,10 @@ async function handleProviderRequest(message: ProviderRequestMessage, respond: (
 
   const type = requestTypeForMethod(message.method);
   if (type) {
+    if (type !== "connect" && !(await hasConnection(message.origin))) {
+      respond(providerError(4100, "Connect this site to Quanta Wallet before signing requests."));
+      return;
+    }
     if (message.method === "eth_requestAccounts" && (await hasConnection(message.origin))) {
       const accounts = await connectedAccountResult(message.origin);
       if (accounts.length === 0) {
@@ -285,56 +387,82 @@ async function handleProviderRequest(message: ProviderRequestMessage, respond: (
   respond(providerError(-32601, `Qubitor provider does not support ${message.method} yet.`));
 }
 
-async function resolvePendingRequest(message: ResolveRequestMessage) {
+async function resolvePendingRequest(message: ResolveRequestMessage): Promise<{ ok: boolean; error?: string }> {
   const pending = pendingRequests.get(message.requestId);
-  if (!pending) return;
-  pendingRequests.delete(message.requestId);
+  if (!pending) return { ok: false, error: "Qubitor request expired. Please try again." };
 
   if (message.decision === "reject") {
+    pendingRequests.delete(message.requestId);
     pending.respond(providerError(4001, "User rejected the Qubitor request."));
-    return;
+    return { ok: true };
   }
 
-  if (pending.method === "eth_requestAccounts") {
-    const account = await currentAccountAddress();
-    if (!account) {
-      pending.respond(providerError(4100, "Unlock Quanta Wallet before connecting this site."));
-      return;
+  try {
+    if (pending.method === "eth_requestAccounts") {
+      const account = await currentAccountAddress();
+      if (!account) {
+        throw new Error("Create or unlock Quanta Wallet before connecting this site.");
+      }
+      await setConnection(
+        pending.origin,
+        message.decision === "limited" ? ["view-account", "limited"] : ["view-account", "request-signatures"],
+      );
+      pendingRequests.delete(message.requestId);
+      pending.respond({ result: [account] });
+      return { ok: true };
     }
-    await setConnection(
-      pending.origin,
-      message.decision === "limited" ? ["view-account", "limited"] : ["view-account", "request-signatures"],
-    );
-    pending.respond({ result: [account] });
-    return;
-  }
 
-  if (pending.method === "wallet_requestPermissions") {
-    await setConnection(
-      pending.origin,
-      message.decision === "limited" ? ["view-account", "limited"] : ["view-account", "request-signatures"],
-    );
-    pending.respond({ result: [{ parentCapability: "eth_accounts", caveats: [] }] });
-    return;
-  }
+    if (pending.method === "wallet_requestPermissions") {
+      const account = await currentAccountAddress();
+      if (!account) {
+        throw new Error("Create or unlock Quanta Wallet before connecting this site.");
+      }
+      await setConnection(
+        pending.origin,
+        message.decision === "limited" ? ["view-account", "limited"] : ["view-account", "request-signatures"],
+      );
+      pendingRequests.delete(message.requestId);
+      pending.respond({ result: [{ parentCapability: "eth_accounts", caveats: [] }] });
+      return { ok: true };
+    }
 
-  if (
-    pending.method === "eth_sendTransaction" ||
-    pending.method === "eth_sign" ||
-    pending.method === "personal_sign" ||
-    pending.method === "eth_signTypedData" ||
-    pending.method === "eth_signTypedData_v4"
-  ) {
-    pending.respond(
-      providerError(
-        4100,
-        "Quanta Wallet reviewed the request, but classical EOA signing and eth_sendTransaction are disabled. Use QubitorPQTxV1-compatible dapp flows.",
-      ),
-    );
-    return;
-  }
+    if (pending.method === "eth_sendTransaction") {
+      if (!(await readConnection(pending.origin))) {
+        throw new Error("Connect this site to Quanta Wallet before signing transactions.");
+      }
+      if (!message.passcode) throw new Error("Enter your Quanta Wallet passcode to sign this transaction.");
+      const account = await currentAccountAddress();
+      if (!account) throw new Error("Unlock Quanta Wallet before signing transactions.");
+      const tx = parseTransactionRequest(pending.params);
+      if (tx.from && tx.from.toLowerCase() !== account.toLowerCase()) {
+        throw new Error(`This request is from ${tx.from.slice(0, 6)}...${tx.from.slice(-4)}, not your active Quanta Account.`);
+      }
+      const profile = await unlockExtensionWalletProfile(message.passcode);
+      const receipt = await sendExtensionDappTransaction(profile, message.passcode, {
+        target: tx.to,
+        valueWei: tx.valueWei,
+        data: tx.data,
+      });
+      pendingRequests.delete(message.requestId);
+      pending.respond({ result: receipt.transactionHash });
+      return { ok: true };
+    }
 
-  pending.respond(providerError(-32601, `Qubitor provider does not support ${pending.method} yet.`));
+    if (
+      pending.method === "eth_sign" ||
+      pending.method === "personal_sign" ||
+      pending.method === "eth_signTypedData" ||
+      pending.method === "eth_signTypedData_v4"
+    ) {
+      throw new Error(
+        "Message signing is not enabled for this compatibility method yet. Quanta Wallet can sign and submit Qubitor transactions through eth_sendTransaction.",
+      );
+    }
+
+    throw new Error(`Qubitor provider does not support ${pending.method} yet.`);
+  } catch (error) {
+    return { ok: false, error: messageOf(error) };
+  }
 }
 
 chrome.runtime.onInstalled.addListener(() => {
@@ -358,7 +486,13 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
   if (message?.kind === "qubitor:resolve-request") {
-    void resolvePendingRequest(message as ResolveRequestMessage).then(() => sendResponse({ ok: true }));
+    void resolvePendingRequest(message as ResolveRequestMessage).then(sendResponse);
+    return true;
+  }
+  if (message?.kind === "qubitor:get-pending-request") {
+    void getPendingRequestDetails(message.requestId as string).then((request) => {
+      sendResponse({ ok: Boolean(request), request, error: request ? undefined : "Qubitor request expired." });
+    });
     return true;
   }
   if (message?.kind === "qubitor:get-connections") {
