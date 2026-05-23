@@ -50,6 +50,7 @@ export default function DeveloperMode() {
   const { variant, cycle } = useMockState(STATES, "Enabled");
   const snapshot = useAccountSnapshot();
   const account = snapshot.account;
+  const accountAddressLabel = snapshot.accountReady ? account.address : "Loading";
 
   const disabled = variant === "Disabled";
   const showTxDebug = variant === "Transaction debug";
@@ -83,7 +84,7 @@ export default function DeveloperMode() {
         ) : (
           <>
             <ExpandableSection title="Smart account" defaultOpen>
-              <Row label="Address" value={account.address} showChevron={false} />
+              <Row label="Address" value={accountAddressLabel} showChevron={false} />
               <Row label="Chain ID" value={String(account.chainId)} showChevron={false} />
               <Row label="Network" value={snapshot.chainName} showChevron={false} />
               <Row label="Gas coin" value={snapshot.nativeCurrencySymbol} showChevron={false} />

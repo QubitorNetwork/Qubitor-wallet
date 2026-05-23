@@ -44,6 +44,7 @@ export default function Send() {
   const amountIsInvalid = amount.trim().length > 0 && parsedAmountWei === undefined;
   const insufficientFunds =
     parsedAmountWei !== undefined && snapshot.balanceWei !== undefined && parsedAmountWei > snapshot.balanceWei;
+  const accountReady = snapshot.accountReady && snapshot.status === "live";
 
   useEffect(() => {
     setAsset((current) => (current === "QBT" ? snapshot.nativeCurrencySymbol : current));
@@ -79,7 +80,7 @@ export default function Send() {
   const wouldRevert = sim ? !sim.willSucceed : false;
   const simInsufficient = sim?.insufficientFunds ?? false;
   const canReview =
-    recipientValid && parsedAmountWei !== undefined && !insufficientFunds && !wouldRevert && !simInsufficient;
+    accountReady && recipientValid && parsedAmountWei !== undefined && !insufficientFunds && !wouldRevert && !simInsufficient;
 
   return (
     <PageContainer>
@@ -97,6 +98,14 @@ export default function Send() {
             Balance {snapshot.balanceLabel}
           </Text>
         </Card>
+
+        {!accountReady ? (
+          <WarningCard
+            severity="info"
+            title="Account is loading"
+            detail="Wait for the live Quanta Account address and balance before preparing a transfer."
+          />
+        ) : null}
 
         <View className="gap-3">
           <Input label="Asset" value={asset} onChangeText={setAsset} />

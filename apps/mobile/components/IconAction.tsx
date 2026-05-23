@@ -7,14 +7,16 @@ interface Props {
   label: string;
   Icon: LucideIcon;
   onPress?: () => void;
+  disabled?: boolean;
 }
 
 /** Source: Qubitor Network — qb-panel square with qb-line hairline,
  *  qb-bone icon, qb-bone caption below. Pressed state → qb-ink. */
-export function IconAction({ label, Icon, onPress }: Props) {
+export function IconAction({ label, Icon, onPress, disabled }: Props) {
   return (
-    <View className="items-center gap-2 flex-1">
+    <View className={`items-center gap-2 flex-1 ${disabled ? "opacity-40" : ""}`}>
       <Pressable
+        disabled={disabled}
         onPress={onPress}
         className="w-14 h-14 rounded-md bg-qb-panel border border-qb-line items-center justify-center active:bg-qb-ink"
       >

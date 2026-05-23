@@ -151,7 +151,7 @@ export default function TransactionReview() {
         </Pressable>
         {advanced ? (
           <Card>
-            <Row label="Account" value={snapshot.account.address} showChevron={false} />
+            <Row label="Account" value={snapshot.accountReady ? snapshot.account.address : "Loading"} showChevron={false} />
             <Row label="Deployment" value={snapshot.deploymentLabel} showChevron={false} />
             <Row label="Readiness" value={snapshot.readinessLabel} showChevron={false} />
             <Row

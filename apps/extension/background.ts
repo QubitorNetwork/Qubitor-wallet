@@ -11,15 +11,12 @@
 
 import { QUBITOR_TESTNET_CHAIN_ID, defaultQubitorRpcUrl, supportedChainId } from "@qubitor/evm";
 
-const FALLBACK_ACCOUNT_ADDRESS = "0x71a9f10E2e4e63F8d1E3E58AB4F2C07A06f11F6c";
 const env = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env;
-const ACCOUNT_ADDRESS = env?.PLASMO_PUBLIC_QUBITOR_ACCOUNT_ADDRESS?.startsWith("0x")
-  ? env.PLASMO_PUBLIC_QUBITOR_ACCOUNT_ADDRESS
-  : FALLBACK_ACCOUNT_ADDRESS;
 const CHAIN_ID = supportedChainId(env?.PLASMO_PUBLIC_QUBITOR_CHAIN_ID ?? QUBITOR_TESTNET_CHAIN_ID);
 const CHAIN_ID_HEX = `0x${CHAIN_ID.toString(16)}`;
 const RPC_URL = env?.PLASMO_PUBLIC_QUBITOR_RPC_URL ?? defaultQubitorRpcUrl(CHAIN_ID);
 const CONNECTIONS_KEY = "qubitor:connections";
+const EXTENSION_WALLET_STORAGE_KEY = "qubitor.extension.pq-wallet.encrypted.v1";
 
 type RequestType = "connect" | "tx" | "sign";
 type Decision = "approve" | "limited" | "reject";
@@ -45,6 +42,14 @@ interface StoredConnection {
   lastUsedAt?: number;
   permissions: string[];
   compatibilityMode: boolean;
+}
+
+interface ExtensionWalletRecordPreview {
+  accountAddress?: string;
+}
+
+interface ExtensionWalletRecord {
+  preview?: ExtensionWalletRecordPreview;
 }
 
 interface ProviderResponse {
@@ -114,6 +119,28 @@ function getConnections(): Promise<Record<string, StoredConnection>> {
       resolve((items[CONNECTIONS_KEY] as Record<string, StoredConnection> | undefined) ?? {});
     });
   });
+}
+
+function getExtensionWalletRecord(): Promise<ExtensionWalletRecord | undefined> {
+  return new Promise((resolve) => {
+    chrome.storage.local.get(EXTENSION_WALLET_STORAGE_KEY, (items) => {
+      resolve(items[EXTENSION_WALLET_STORAGE_KEY] as ExtensionWalletRecord | undefined);
+    });
+  });
+}
+
+async function currentAccountAddress(): Promise<string | undefined> {
+  if (env?.PLASMO_PUBLIC_QUBITOR_ACCOUNT_ADDRESS?.startsWith("0x")) {
+    return env.PLASMO_PUBLIC_QUBITOR_ACCOUNT_ADDRESS;
+  }
+  const previewAddress = (await getExtensionWalletRecord())?.preview?.accountAddress;
+  return previewAddress?.startsWith("0x") ? previewAddress : undefined;
+}
+
+async function connectedAccountResult(origin: string): Promise<string[]> {
+  if (!(await hasConnection(origin))) return [];
+  const account = await currentAccountAddress();
+  return account ? [account] : [];
 }
 
 async function setConnection(origin: string, permissions: string[]) {
@@ -202,7 +229,7 @@ async function handleProviderRequest(message: ProviderRequestMessage, respond: (
       respond({ result: "QubitorWallet/0.0.1" });
       return;
     case "eth_accounts":
-      respond({ result: (await hasConnection(message.origin)) ? [ACCOUNT_ADDRESS] : [] });
+      respond({ result: await connectedAccountResult(message.origin) });
       return;
     case "wallet_getPermissions":
       respond({
@@ -243,7 +270,12 @@ async function handleProviderRequest(message: ProviderRequestMessage, respond: (
   const type = requestTypeForMethod(message.method);
   if (type) {
     if (message.method === "eth_requestAccounts" && (await hasConnection(message.origin))) {
-      respond({ result: [ACCOUNT_ADDRESS] });
+      const accounts = await connectedAccountResult(message.origin);
+      if (accounts.length === 0) {
+        respond(providerError(4100, "Unlock Quanta Wallet before connecting this site."));
+        return;
+      }
+      respond({ result: accounts });
       return;
     }
     openRequestWindow(type, message, respond);
@@ -264,11 +296,16 @@ async function resolvePendingRequest(message: ResolveRequestMessage) {
   }
 
   if (pending.method === "eth_requestAccounts") {
+    const account = await currentAccountAddress();
+    if (!account) {
+      pending.respond(providerError(4100, "Unlock Quanta Wallet before connecting this site."));
+      return;
+    }
     await setConnection(
       pending.origin,
       message.decision === "limited" ? ["view-account", "limited"] : ["view-account", "request-signatures"],
     );
-    pending.respond({ result: [ACCOUNT_ADDRESS] });
+    pending.respond({ result: [account] });
     return;
   }
 

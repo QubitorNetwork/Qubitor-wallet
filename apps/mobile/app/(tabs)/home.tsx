@@ -24,6 +24,7 @@ export default function Home() {
   const score = readinessScore(account.security);
   const live = snapshot.status === "live";
   const loading = snapshot.status === "loading";
+  const accountReady = snapshot.accountReady;
   const balanceIsZero = (snapshot.balanceWei ?? 0n) === 0n;
 
   return (
@@ -53,7 +54,13 @@ export default function Home() {
             tone="primary"
             onPress={() => router.push("/(tabs)/accounts")}
           >
-            <AddressDisplay address={account.address} />
+            {accountReady ? (
+              <AddressDisplay address={account.address} />
+            ) : (
+              <Text variant="caption" muted>
+                Loading account…
+              </Text>
+            )}
           </HeroCard>
           <HeroCard
             title={`${score}/100`}
@@ -90,8 +97,18 @@ export default function Home() {
         </Card>
 
         <View className="flex-row gap-3">
-          <IconAction label="Send" Icon={ArrowUpRight} onPress={() => router.push("/send")} />
-          <IconAction label="Receive" Icon={ArrowDownLeft} onPress={() => router.push("/receive")} />
+          <IconAction
+            label="Send"
+            Icon={ArrowUpRight}
+            onPress={() => router.push("/send")}
+            disabled={!accountReady}
+          />
+          <IconAction
+            label="Receive"
+            Icon={ArrowDownLeft}
+            onPress={() => router.push("/receive")}
+            disabled={!accountReady}
+          />
           <IconAction label="Bridge" Icon={Repeat} onPress={() => router.push("/bridge")} />
           <IconAction label="Secure" Icon={ShieldCheck} onPress={() => router.push("/(tabs)/security")} />
         </View>

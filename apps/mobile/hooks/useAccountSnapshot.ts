@@ -25,8 +25,6 @@ import {
 import {
   MOCK_ACCOUNT,
   MOCK_ACTIVITY,
-  MOCK_BALANCE_LABEL,
-  MOCK_BALANCE_QBT,
   MOCK_TOKENS,
   type ActivityItem,
   type TokenItem,
@@ -49,6 +47,13 @@ import { getSelectedChainId, setSelectedChainId, type SelectableChainId } from "
 type SnapshotStatus = "loading" | "live" | "fallback";
 type FaucetStatus = "idle" | "requesting" | "success" | "error";
 type PQActionStatus = "idle" | "requesting" | "success" | "error";
+const PLACEHOLDER_ADDRESS = "0x0000000000000000000000000000000000000000" as Hex;
+
+const PLACEHOLDER_ACCOUNT: QubitorAccount = {
+  ...MOCK_ACCOUNT,
+  address: PLACEHOLDER_ADDRESS,
+  deployed: false,
+};
 
 const INLINE_ENV: Record<string, string | undefined> = {
   EXPO_PUBLIC_QUBITOR_ACCOUNT_ADDRESS: process.env.EXPO_PUBLIC_QUBITOR_ACCOUNT_ADDRESS,
@@ -65,6 +70,8 @@ interface SnapshotState {
   pqTxStatus: PQActionStatus;
   pqRotateStatus: PQActionStatus;
   account: QubitorAccount;
+  accountReady: boolean;
+  activeAddress?: Hex;
   balanceWei?: bigint;
   balanceNative: string;
   balanceLabel: string;
@@ -96,9 +103,13 @@ function env(name: string): string | undefined {
   return INLINE_ENV[name] ?? proc?.env?.[name];
 }
 
-function configuredAccountAddress(): Hex {
+function explicitConfiguredAccountAddress(): Hex | undefined {
   const configured = env("EXPO_PUBLIC_QUBITOR_ACCOUNT_ADDRESS");
-  return configured?.startsWith("0x") ? (configured as Hex) : MOCK_ACCOUNT.address;
+  return configured?.startsWith("0x") ? (configured as Hex) : undefined;
+}
+
+function configuredAccountAddress(): Hex {
+  return explicitConfiguredAccountAddress() ?? PLACEHOLDER_ADDRESS;
 }
 
 function configuredChainId() {
@@ -161,6 +172,8 @@ function buildLiveState(
     pqTxStatus: "idle",
     pqRotateStatus: "idle",
     account,
+    accountReady: true,
+    activeAddress: snapshot.address,
     balanceWei: snapshot.balanceWei,
     balanceNative,
     balanceLabel: `${balanceNative} ${nativeSymbol}`,
@@ -196,17 +209,19 @@ function fallbackState(error?: string): SnapshotState {
     deployStatus: "idle",
     pqTxStatus: "idle",
     pqRotateStatus: "idle",
-    account: MOCK_ACCOUNT,
+    account: PLACEHOLDER_ACCOUNT,
+    accountReady: false,
+    activeAddress: undefined,
     balanceWei: undefined,
-    balanceNative: MOCK_BALANCE_QBT,
-    balanceLabel: MOCK_BALANCE_LABEL,
-    balanceUsd: MOCK_BALANCE_LABEL,
+    balanceNative: "0.0000",
+    balanceLabel: "— QBT",
+    balanceUsd: "— QBT",
     tokens: MOCK_TOKENS,
     activity: MOCK_ACTIVITY,
     chainName: "Qubitor Testnet",
     nativeCurrencySymbol: "QBT",
-    deploymentLabel: MOCK_ACCOUNT.deployed ? "Deployed" : "Counterfactual",
-    readinessLabel: MOCK_ACCOUNT.security.mode,
+    deploymentLabel: "Loading",
+    readinessLabel: "Loading",
     error,
   };
 }
@@ -550,7 +565,8 @@ export function useAccountSnapshot() {
           currentPublicKeyCommitment: pqProfile.currentPublicKeyCommitment ?? pqAccount.publicKeyCommitment,
         });
       }
-      const address = pqAccount?.accountAddress ?? pqProfile?.accountAddress ?? config.address;
+      const address = pqAccount?.accountAddress ?? pqProfile?.accountAddress ?? explicitConfiguredAccountAddress();
+      if (!address) throw new Error("Still deriving your Quanta Account address.");
       const snapshot = await readAccountSnapshot(address, { chainId: config.chainId, rpcUrl: config.rpcUrl });
       const nextState = buildLiveState(snapshot, pqAccount, pqProfile);
       return {

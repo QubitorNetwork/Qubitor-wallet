@@ -28,12 +28,14 @@ export default function Receive() {
   const { variant, cycle } = useMockState(STATES);
   const snapshot = useAccountSnapshot();
   const { account } = snapshot;
+  const accountReady = snapshot.accountReady;
   const [chain, setChain] = useState("");
   const [copyOpen, setCopyOpen] = useState(false);
   const [chainOpen, setChainOpen] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
 
   const copyAddress = async () => {
+    if (!accountReady) return;
     if (await copyText(account.address, "Address")) setCopyOpen(true);
   };
 
@@ -44,23 +46,37 @@ export default function Receive() {
       <View className="gap-8">
         <View className="items-center">
           <QrFrame>
-            <QRCode
-              value={account.address}
-              size={variant === "QR expanded" ? 240 : 200}
-              color={colors.text}
-              backgroundColor="transparent"
-            />
+            {accountReady ? (
+              <QRCode
+                value={account.address}
+                size={variant === "QR expanded" ? 240 : 200}
+                color={colors.text}
+                backgroundColor="transparent"
+              />
+            ) : (
+              <View className="w-[200px] h-[200px] items-center justify-center px-6">
+                <Text variant="body" muted className="text-center">
+                  Loading your Quanta Account address…
+                </Text>
+              </View>
+            )}
           </QrFrame>
           <View className="mt-5 items-center gap-2">
-            <AddressDisplay address={account.address} />
+            {accountReady ? (
+              <AddressDisplay address={account.address} />
+            ) : (
+              <Text variant="mono" muted>
+                —
+              </Text>
+            )}
             <Badge label={account.security.mode} />
           </View>
         </View>
 
         <View className="flex-row gap-3">
-          <IconAction label="Copy" Icon={Copy} onPress={copyAddress} />
+          <IconAction label="Copy" Icon={Copy} onPress={copyAddress} disabled={!accountReady} />
           <IconAction label={chain || snapshot.chainName} Icon={Globe} onPress={() => setChainOpen(true)} />
-          <IconAction label="Share" Icon={Share2} onPress={() => setShareOpen(true)} />
+          <IconAction label="Share" Icon={Share2} onPress={() => setShareOpen(true)} disabled={!accountReady} />
         </View>
 
         {variant === "Unsupported chain selected" ? (
@@ -91,9 +107,9 @@ export default function Receive() {
         onSelect={setChain}
       />
       <ShareSheet
-        visible={shareOpen}
+        visible={shareOpen && accountReady}
         onDismiss={() => setShareOpen(false)}
-        payload={account.address}
+        payload={accountReady ? account.address : ""}
         onCopied={() => setCopyOpen(true)}
       />
       <CopySheet visible={copyOpen} onDismiss={() => setCopyOpen(false)} label="Address" />

@@ -17,7 +17,8 @@ const STATES = ["Recovery configured", "Recovery skipped"] as const;
 
 export default function SetupSummary() {
   const { variant, cycle } = useMockState(STATES);
-  const { account } = useAccountSnapshot();
+  const snapshot = useAccountSnapshot();
+  const { account } = snapshot;
   return (
     <PageContainer>
       <PageHeader title="You're all set" />
@@ -34,7 +35,13 @@ export default function SetupSummary() {
             <Badge label={account.security.mode} />
           </View>
           <View className="mt-2">
-            <AddressDisplay address={account.address} />
+            {snapshot.accountReady ? (
+              <AddressDisplay address={account.address} />
+            ) : (
+              <Text variant="caption" muted>
+                Loading account…
+              </Text>
+            )}
           </View>
           <View className="mt-4">
             <Row
@@ -54,7 +61,9 @@ export default function SetupSummary() {
         ) : null}
         <View className="flex-1" />
         <View className="items-center">
-          <Button onPress={() => router.replace("/(tabs)/home")}>Continue to Home</Button>
+          <Button onPress={() => router.replace("/(tabs)/home")} disabled={!snapshot.accountReady}>
+            Continue to Home
+          </Button>
         </View>
         <View className="items-center">
           <DebugOnly>

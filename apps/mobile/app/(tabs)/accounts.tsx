@@ -15,6 +15,7 @@ import { useAccountSnapshot } from "@/hooks/useAccountSnapshot";
 export default function Accounts() {
   const snapshot = useAccountSnapshot();
   const account = snapshot.account;
+  const accountReady = snapshot.accountReady;
   const badge = account.deployed ? account.security.mode : "Counterfactual";
 
   return (
@@ -32,7 +33,13 @@ export default function Accounts() {
           tone="green"
           onPress={() => router.push("/account-detail")}
         >
-          <AddressDisplay address={account.address} />
+          {accountReady ? (
+            <AddressDisplay address={account.address} />
+          ) : (
+            <Text variant="caption" className="text-background opacity-80">
+              Loading account…
+            </Text>
+          )}
           <View className="flex-row items-center justify-between mt-4">
             <Text variant="caption" className="text-background opacity-80">
               Balance

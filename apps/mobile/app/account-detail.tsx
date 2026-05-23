@@ -16,6 +16,7 @@ import { useAccountSnapshot } from "@/hooks/useAccountSnapshot";
 export default function AccountDetail() {
   const snapshot = useAccountSnapshot();
   const account = snapshot.account;
+  const accountReady = snapshot.accountReady;
   const badge = account.deployed ? account.security.mode : "Counterfactual";
 
   return (
@@ -24,7 +25,13 @@ export default function AccountDetail() {
 
       <View className="gap-5">
         <HeroCard title={account.label} subtitle={badge} tone="green">
-          <AddressDisplay address={account.address} />
+          {accountReady ? (
+            <AddressDisplay address={account.address} />
+          ) : (
+            <Text variant="caption" className="text-background opacity-80">
+              Loading account…
+            </Text>
+          )}
           <View className="flex-row items-center justify-between mt-4">
             <Text variant="caption" className="text-background opacity-80">
               Balance
