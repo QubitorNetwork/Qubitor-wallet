@@ -28,7 +28,31 @@ window.addEventListener("message", (event: MessageEvent<ProviderBridgeRequest>) 
   if (data?.source !== "qubitor:provider") return;
   if (data.kind !== "request" || !data.requestId || !data.method || !data.origin) return;
 
-  const port = chrome.runtime.connect({ name: "qubitor:provider" });
+  const postStatus = (phase: string, error?: { code: number; message: string }) => {
+    window.postMessage(
+      {
+        source: "qubitor:provider-status",
+        requestId: data.requestId,
+        phase,
+        error,
+      },
+      "*",
+    );
+  };
+
+  postStatus("relay-received");
+
+  let port: chrome.runtime.Port;
+  try {
+    port = chrome.runtime.connect({ name: "qubitor:provider" });
+    postStatus("runtime-connected");
+  } catch (error) {
+    postStatus("runtime-connect-failed", {
+      code: 4900,
+      message: error instanceof Error ? error.message : "Could not connect to Quanta Wallet extension runtime.",
+    });
+    return;
+  }
   let settled = false;
   let pollId: number | undefined;
   let timeoutId: number | undefined;
@@ -83,11 +107,21 @@ window.addEventListener("message", (event: MessageEvent<ProviderBridgeRequest>) 
     });
   }, 590_000);
 
-  port.postMessage({
-    kind: "qubitor:provider-request",
-    requestId: data.requestId,
-    origin: data.origin,
-    method: data.method,
-    params: data.params ?? [],
-  });
+  try {
+    port.postMessage({
+      kind: "qubitor:provider-request",
+      requestId: data.requestId,
+      origin: data.origin,
+      method: data.method,
+      params: data.params ?? [],
+    });
+    postStatus("request-posted");
+  } catch (error) {
+    settle({
+      error: {
+        code: 4900,
+        message: error instanceof Error ? error.message : "Could not post request to Quanta Wallet extension runtime.",
+      },
+    });
+  }
 });

@@ -29,6 +29,7 @@ const CONNECTIONS_KEY = "qubitor:connections";
 const EXTENSION_WALLET_STORAGE_KEY = "qubitor.extension.pq-wallet.encrypted.v1";
 const PENDING_PROVIDER_REQUESTS_KEY = "qubitor:provider-pending.v1";
 const PROVIDER_RESPONSES_KEY = "qubitor:provider-responses.v1";
+const PROVIDER_DIAGNOSTICS_KEY = "qubitor:provider-diagnostics.v1";
 const REQUEST_TTL_MS = 10 * 60 * 1000;
 
 type RequestType = "connect" | "tx" | "sign";
@@ -93,6 +94,17 @@ interface StoredProviderResponse {
   expiresAt: number;
 }
 
+interface ProviderDiagnostic {
+  id: string;
+  at: number;
+  event: string;
+  requestId?: string;
+  origin?: string;
+  method?: string;
+  detail?: string;
+  extensionVersion: string;
+}
+
 interface ParsedTransactionRequest {
   from?: Hex;
   to: Hex;
@@ -116,6 +128,7 @@ interface PendingRequestDetails {
   parseError?: string;
 }
 
+const MAIN_WORLD_PROVIDER_SCRIPT_ID = "contentsInjectProvider";
 const pendingRequests = new Map<string, PendingRequest>();
 
 function hostnameFromOrigin(origin: string): string {
@@ -132,6 +145,37 @@ function providerError(code: number, message: string): ProviderResponse {
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : "Qubitor request failed.";
+}
+
+function extensionVersion(): string {
+  try {
+    return chrome.runtime.getManifest().version;
+  } catch {
+    return "unknown";
+  }
+}
+
+async function recordProviderDiagnostic(
+  event: string,
+  details: Partial<Omit<ProviderDiagnostic, "id" | "at" | "event" | "extensionVersion">> = {},
+): Promise<void> {
+  try {
+    const entry: ProviderDiagnostic = {
+      id: `${Date.now().toString(16)}-${Math.random().toString(16).slice(2)}`,
+      at: nowMs(),
+      event,
+      extensionVersion: extensionVersion(),
+      ...details,
+    };
+    const current = await new Promise<ProviderDiagnostic[]>((resolve) => {
+      chrome.storage.local.get(PROVIDER_DIAGNOSTICS_KEY, (items) => {
+        resolve((items[PROVIDER_DIAGNOSTICS_KEY] as ProviderDiagnostic[] | undefined) ?? []);
+      });
+    });
+    await chrome.storage.local.set({ [PROVIDER_DIAGNOSTICS_KEY]: [entry, ...current].slice(0, 60) });
+  } catch {
+    // Diagnostics must never block provider requests.
+  }
 }
 
 function requestTypeForMethod(method: string): RequestType | null {
@@ -354,6 +398,11 @@ async function openRequestWindow(
   };
   pendingRequests.set(request.requestId, pending);
   await savePendingProviderRequest(pending);
+  await recordProviderDiagnostic("request:pending", {
+    requestId: request.requestId,
+    origin: request.origin,
+    method: request.method,
+  });
 
   const params = new URLSearchParams({
     type,
@@ -363,12 +412,78 @@ async function openRequestWindow(
   });
   const url = chrome.runtime.getURL(`tabs/request.html?${params.toString()}`);
 
-  chrome.windows.create({ url, type: "popup", width: 420, height: 720 }, () => {
+  const completeOpenFailure = (detail: string) => {
+    void completePendingRequest(request.requestId, providerError(5000, detail));
+  };
+
+  const openFallbackTab = (reason: string) => {
+    void recordProviderDiagnostic("approval:popup-fallback", {
+      requestId: request.requestId,
+      origin: request.origin,
+      method: request.method,
+      detail: reason,
+    });
+    chrome.tabs.create({ url, active: true }, (tab) => {
+      if (chrome.runtime.lastError) {
+        const detail = chrome.runtime.lastError.message ?? "Could not open Qubitor review tab.";
+        void recordProviderDiagnostic("approval:tab-open-failed", {
+          requestId: request.requestId,
+          origin: request.origin,
+          method: request.method,
+          detail,
+        });
+        completeOpenFailure(detail);
+        return;
+      }
+      if (tab?.id === undefined) {
+        const detail = "Chrome did not return a Quanta Wallet approval tab.";
+        void recordProviderDiagnostic("approval:tab-open-empty", {
+          requestId: request.requestId,
+          origin: request.origin,
+          method: request.method,
+          detail,
+        });
+        completeOpenFailure(detail);
+        return;
+      }
+      void recordProviderDiagnostic("approval:open-tab", {
+        requestId: request.requestId,
+        origin: request.origin,
+        method: request.method,
+        detail: `tab:${tab.id}`,
+      });
+    });
+  };
+
+  chrome.windows.create({ url, type: "popup", width: 420, height: 720, focused: true }, (createdWindow) => {
     if (chrome.runtime.lastError) {
-      pendingRequests.delete(request.requestId);
-      void deletePendingProviderRequest(request.requestId);
-      respond(providerError(5000, chrome.runtime.lastError.message ?? "Could not open Qubitor review window."));
+      const detail = chrome.runtime.lastError.message ?? "Could not open Qubitor review window.";
+      void recordProviderDiagnostic("approval:open-failed", {
+        requestId: request.requestId,
+        origin: request.origin,
+        method: request.method,
+        detail,
+      });
+      openFallbackTab(detail);
+      return;
     }
+    if (createdWindow?.id === undefined) {
+      const detail = "Chrome did not return a Quanta Wallet approval window.";
+      void recordProviderDiagnostic("approval:open-empty", {
+        requestId: request.requestId,
+        origin: request.origin,
+        method: request.method,
+        detail,
+      });
+      openFallbackTab(detail);
+      return;
+    }
+    void recordProviderDiagnostic("approval:open", {
+      requestId: request.requestId,
+      origin: request.origin,
+      method: request.method,
+      detail: `window:${createdWindow.id}`,
+    });
   });
 }
 
@@ -433,6 +548,12 @@ async function getPendingRequestDetails(requestId: string): Promise<PendingReque
 }
 
 async function handleProviderRequest(message: ProviderRequestMessage, respond: (response: ProviderResponse) => void) {
+  void recordProviderDiagnostic("request:received", {
+    requestId: message.requestId,
+    origin: message.origin,
+    method: message.method,
+  });
+
   switch (message.method) {
     case "eth_chainId":
       respond({ result: CHAIN_ID_HEX });
@@ -509,6 +630,12 @@ async function completePendingRequest(requestId: string, response: ProviderRespo
   pendingRequests.delete(requestId);
   await deletePendingProviderRequest(requestId);
   await storeProviderResponse(requestId, response);
+  await recordProviderDiagnostic(response.error ? "request:error" : "request:resolved", {
+    requestId,
+    origin: pending?.origin,
+    method: pending?.method,
+    detail: response.error ? `${response.error.code}:${response.error.message}` : "ok",
+  });
   if (pending?.respond) {
     try {
       await pending.respond(response);
@@ -593,7 +720,27 @@ async function resolvePendingRequest(message: ResolveRequestMessage): Promise<{ 
   }
 }
 
-chrome.runtime.onInstalled.addListener(() => {
+function refreshMainWorldProviderAfterUpdate(details: chrome.runtime.InstalledDetails): void {
+  if (details.reason !== "update") return;
+  chrome.scripting.unregisterContentScripts({ ids: [MAIN_WORLD_PROVIDER_SCRIPT_ID] }, () => {
+    if (chrome.runtime.lastError) {
+      void recordProviderDiagnostic("provider-registration:refresh-skipped", {
+        detail: chrome.runtime.lastError.message,
+      });
+      return;
+    }
+    void recordProviderDiagnostic("provider-registration:refresh-reload", {
+      detail: `updated:${details.previousVersion ?? "unknown"}->${extensionVersion()}`,
+    });
+    chrome.runtime.reload();
+  });
+}
+
+chrome.runtime.onInstalled.addListener((details) => {
+  void getPendingProviderRequests();
+  void getStoredProviderResponses();
+  void recordProviderDiagnostic("extension:installed", { detail: details.reason });
+  refreshMainWorldProviderAfterUpdate(details);
   console.log("[qubitor] extension installed");
 });
 
@@ -657,7 +804,7 @@ chrome.runtime.onConnect.addListener((port) => {
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type === "qubitor:ping") {
-    sendResponse({ ok: true, build: "shell" });
+    sendResponse({ ok: true, build: "shell", version: extensionVersion() });
     return true;
   }
   if (message?.kind === "qubitor:open-request") {
@@ -684,6 +831,12 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.kind === "qubitor:get-provider-response") {
     void readProviderResponse(message.requestId as string).then((entry) => {
       sendResponse({ ok: Boolean(entry), response: entry?.response });
+    });
+    return true;
+  }
+  if (message?.kind === "qubitor:get-provider-diagnostics") {
+    chrome.storage.local.get(PROVIDER_DIAGNOSTICS_KEY, (items) => {
+      sendResponse({ ok: true, diagnostics: items[PROVIDER_DIAGNOSTICS_KEY] ?? [] });
     });
     return true;
   }

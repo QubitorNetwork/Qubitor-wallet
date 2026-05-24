@@ -26,6 +26,7 @@ interface RequestArgs {
 interface ProviderBridgeResponse {
   source?: string;
   requestId?: string;
+  phase?: string;
   result?: unknown;
   error?: {
     code: number;
@@ -81,19 +82,51 @@ function requestThroughRelay(args: RequestArgs): Promise<unknown> {
   const requestId = nextRequestId();
 
   return new Promise((resolve, reject) => {
-    const timeout = window.setTimeout(() => {
+    let relayAcknowledged = false;
+
+    const cleanup = () => {
+      window.clearTimeout(relayTimeout);
+      window.clearTimeout(requestTimeout);
       window.removeEventListener("message", onResponse);
-      reject(new Error(`qubitor provider: ${args.method} timed out`));
+    };
+
+    const relayTimeout = window.setTimeout(() => {
+      if (relayAcknowledged) return;
+      cleanup();
+      const error = new Error(
+        "Quanta Wallet extension relay did not respond. Reload the page after installing or updating the extension.",
+      ) as Error & { code?: number };
+      error.code = 4900;
+      reject(error);
+    }, 4_000);
+
+    const requestTimeout = window.setTimeout(() => {
+      cleanup();
+      const error = new Error(`qubitor provider: ${args.method} timed out`) as Error & { code?: number };
+      error.code = 5000;
+      reject(error);
     }, 600_000);
 
     function onResponse(event: MessageEvent<ProviderBridgeResponse>) {
       if (event.source !== window) return;
       const data = event.data;
-      if (data?.source !== "qubitor:provider-response") return;
-      if (data.requestId !== requestId) return;
+      if (!data || data.requestId !== requestId) return;
 
-      window.clearTimeout(timeout);
-      window.removeEventListener("message", onResponse);
+      if (data?.source === "qubitor:provider-status") {
+        relayAcknowledged = true;
+        window.clearTimeout(relayTimeout);
+        if (data.error) {
+          cleanup();
+          const error = new Error(data.error.message) as Error & { code?: number };
+          error.code = data.error.code;
+          reject(error);
+        }
+        return;
+      }
+
+      if (data?.source !== "qubitor:provider-response") return;
+
+      cleanup();
 
       if (data.error) {
         const error = new Error(data.error.message) as Error & { code?: number };

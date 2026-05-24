@@ -492,7 +492,11 @@ export function WalletShell() {
             variant="danger"
             disabled={w.busy}
             onClick={() => {
-              if (confirm("Wipe this wallet from the browser? This cannot be undone without a Recovery Kit.")) {
+              if (
+                confirm(
+                  "Wipe this wallet and all connected-site approvals from the browser? This cannot be undone without a Recovery Kit.",
+                )
+              ) {
                 w.wipe();
               }
             }}

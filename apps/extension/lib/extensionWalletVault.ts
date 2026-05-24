@@ -17,6 +17,10 @@ import {
 
 export const EXTENSION_WALLET_STORAGE_KEY = "qubitor.extension.pq-wallet.encrypted.v1";
 const EXTENSION_WALLET_HISTORY_KEY = "qubitor.extension.activity.v1";
+const EXTENSION_CONNECTIONS_KEY = "qubitor:connections";
+const EXTENSION_PENDING_PROVIDER_REQUESTS_KEY = "qubitor:provider-pending.v1";
+const EXTENSION_PROVIDER_RESPONSES_KEY = "qubitor:provider-responses.v1";
+const EXTENSION_PROVIDER_DIAGNOSTICS_KEY = "qubitor:provider-diagnostics.v1";
 const EXTENSION_BACKUP_FORMAT = "qubitor.extension.pq-wallet-backup.encrypted.v1";
 const RESTORE_VALIDATION_MESSAGE = "0x71756269746f722d657874656e73696f6e2d726573746f72652d636865636b" as const;
 
@@ -211,7 +215,14 @@ export async function restoreExtensionWalletProfile(encoded: string, passcode: s
 }
 
 export async function wipeExtensionWallet(): Promise<void> {
-  await Promise.all([storageDelete(EXTENSION_WALLET_STORAGE_KEY), storageDelete(EXTENSION_WALLET_HISTORY_KEY)]);
+  await Promise.all([
+    storageDelete(EXTENSION_WALLET_STORAGE_KEY),
+    storageDelete(EXTENSION_WALLET_HISTORY_KEY),
+    storageDelete(EXTENSION_CONNECTIONS_KEY),
+    storageDelete(EXTENSION_PENDING_PROVIDER_REQUESTS_KEY),
+    storageDelete(EXTENSION_PROVIDER_RESPONSES_KEY),
+    storageDelete(EXTENSION_PROVIDER_DIAGNOSTICS_KEY),
+  ]);
 }
 
 export async function rememberExtensionAccount(

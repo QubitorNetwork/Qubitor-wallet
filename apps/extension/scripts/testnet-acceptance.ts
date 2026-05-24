@@ -3,6 +3,8 @@ import {
   EXTENSION_WALLET_STORAGE_KEY,
   createExtensionWalletProfile,
   readExtensionActivity,
+  unlockExtensionWalletProfile,
+  wipeExtensionWallet,
 } from "../lib/extensionWalletVault";
 import {
   readExtensionWalletSnapshot,
@@ -70,12 +72,36 @@ async function main() {
   const recipient = env("QUBITOR_EXTENSION_ACCEPTANCE_TARGET", "0x000000000000000000000000000000000000dEaD") as Hex;
   const amount = env("QUBITOR_EXTENSION_ACCEPTANCE_AMOUNT_QBT", "0.001");
 
+  let firstProfile = await createExtensionWalletProfile(passcode);
+  let { snapshot: firstSnapshot } = await readExtensionWalletSnapshot(firstProfile, passcode);
+  storage.set("qubitor:connections", { "https://bridge.example": { origin: "https://bridge.example" } });
+  storage.set("qubitor:provider-pending.v1", { stale: { requestId: "stale" } });
+  storage.set("qubitor:provider-responses.v1", { stale: { response: { result: [] } } });
+  storage.set("qubitor:provider-diagnostics.v1", [{ event: "test" }]);
+  await wipeExtensionWallet();
+  assertAcceptance(!storage.has(EXTENSION_WALLET_STORAGE_KEY), "Wipe did not remove the encrypted wallet record.");
+  assertAcceptance(!storage.has("qubitor:connections"), "Wipe did not remove connected-site approvals.");
+  assertAcceptance(!storage.has("qubitor:provider-pending.v1"), "Wipe did not remove pending provider requests.");
+  assertAcceptance(!storage.has("qubitor:provider-responses.v1"), "Wipe did not remove provider responses.");
+  assertAcceptance(!storage.has("qubitor:provider-diagnostics.v1"), "Wipe did not remove provider diagnostics.");
+
   let profile = await createExtensionWalletProfile(passcode);
   let { profile: savedProfile, snapshot } = await readExtensionWalletSnapshot(profile, passcode);
   profile = savedProfile;
 
   assertAcceptance(snapshot.address.startsWith("0x"), "Extension did not derive a 0x Quanta Account address.");
   assertAcceptance(snapshot.chainId === 91338, `Expected Qubitor Testnet chain 91338, got ${snapshot.chainId}.`);
+  assertAcceptance(
+    snapshot.address.toLowerCase() !== firstSnapshot.address.toLowerCase(),
+    "Creating after explicit wipe reused the previous Quanta Account address.",
+  );
+
+  const reopenedProfile = await unlockExtensionWalletProfile(passcode);
+  const { snapshot: reopenedSnapshot } = await readExtensionWalletSnapshot(reopenedProfile, passcode);
+  assertAcceptance(
+    reopenedSnapshot.address.toLowerCase() === snapshot.address.toLowerCase(),
+    "Unlocking an existing encrypted profile changed the Quanta Account address.",
+  );
 
   const storedRecord = JSON.stringify(storage.get(EXTENSION_WALLET_STORAGE_KEY));
   assertAcceptance(!storedRecord.includes('"privateKey"'), "Encrypted wallet record exposes privateKey in plaintext.");
