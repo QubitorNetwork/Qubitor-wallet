@@ -22,17 +22,38 @@ interface ProviderBridgeRequest {
   params?: unknown[];
 }
 
+interface ProviderBridgeResponse {
+  source?: string;
+  requestId?: string;
+  result?: unknown;
+  error?: { code: number; message: string };
+}
+
+const activeRequests = new Map<
+  string,
+  (response: { result?: unknown; error?: { code: number; message: string } }) => void
+>();
+
+chrome.runtime.onMessage.addListener((message: ProviderBridgeResponse) => {
+  if (message?.source !== "qubitor:provider-response" || !message.requestId) return false;
+  const settle = activeRequests.get(message.requestId);
+  if (!settle) return false;
+  settle({ result: message.result, error: message.error });
+  return false;
+});
+
 window.addEventListener("message", (event: MessageEvent<ProviderBridgeRequest>) => {
   if (event.source !== window) return;
   const data = event.data;
   if (data?.source !== "qubitor:provider") return;
   if (data.kind !== "request" || !data.requestId || !data.method || !data.origin) return;
+  const requestId = data.requestId;
 
   const postStatus = (phase: string, error?: { code: number; message: string }) => {
     window.postMessage(
       {
         source: "qubitor:provider-status",
-        requestId: data.requestId,
+        requestId,
         phase,
         error,
       },
@@ -60,6 +81,7 @@ window.addEventListener("message", (event: MessageEvent<ProviderBridgeRequest>) 
   const settle = (response: { result?: unknown; error?: { code: number; message: string } }) => {
     if (settled) return;
     settled = true;
+    activeRequests.delete(requestId);
     if (pollId !== undefined) window.clearInterval(pollId);
     if (timeoutId !== undefined) window.clearTimeout(timeoutId);
     try {
@@ -70,7 +92,7 @@ window.addEventListener("message", (event: MessageEvent<ProviderBridgeRequest>) 
     window.postMessage(
       {
         source: "qubitor:provider-response",
-        requestId: data.requestId,
+        requestId,
         result: response.result,
         error: response.error,
       },
@@ -78,9 +100,11 @@ window.addEventListener("message", (event: MessageEvent<ProviderBridgeRequest>) 
     );
   };
 
+  activeRequests.set(requestId, settle);
+
   const pollStoredResponse = () => {
     chrome.runtime.sendMessage(
-      { kind: "qubitor:get-provider-response", requestId: data.requestId },
+      { kind: "qubitor:get-provider-response", requestId },
       (response: { ok?: boolean; response?: { result?: unknown; error?: { code: number; message: string } } }) => {
         if (settled || chrome.runtime.lastError || !response?.response) return;
         settle(response.response);
@@ -89,7 +113,7 @@ window.addEventListener("message", (event: MessageEvent<ProviderBridgeRequest>) 
   };
 
   port.onMessage.addListener((response) => {
-    if (response?.source !== "qubitor:provider-response" || response.requestId !== data.requestId) return;
+    if (response?.source !== "qubitor:provider-response" || response.requestId !== requestId) return;
     settle({ result: response.result, error: response.error });
   });
 
@@ -110,7 +134,7 @@ window.addEventListener("message", (event: MessageEvent<ProviderBridgeRequest>) 
   try {
     port.postMessage({
       kind: "qubitor:provider-request",
-      requestId: data.requestId,
+      requestId,
       origin: data.origin,
       method: data.method,
       params: data.params ?? [],

@@ -1,6 +1,6 @@
 {
   "name": "@qubitor/extension",
-  "version": "0.0.21",
+  "version": "0.0.22",
   "private": true,
   "displayName": "Quanta Wallet",
   "description": "Quanta Wallet browser extension — Qubitor Network smart account with PQ-native validation.",

@@ -41,6 +41,8 @@ interface ProviderRequestMessage {
   origin: string;
   method: string;
   params?: unknown[];
+  tabId?: number;
+  frameId?: number;
 }
 
 interface ResolveRequestMessage {
@@ -85,6 +87,8 @@ interface PendingRequest {
   params?: unknown[];
   createdAt: number;
   expiresAt: number;
+  tabId?: number;
+  frameId?: number;
   respond?: (response: ProviderResponse) => void | Promise<void>;
 }
 
@@ -326,6 +330,26 @@ async function connectedAccountResult(origin: string): Promise<string[]> {
   return account ? [account] : [];
 }
 
+async function permissionsResult(origin: string): Promise<unknown[]> {
+  if (!(await hasConnection(origin))) return [];
+  const account = await currentAccountAddress();
+  return [
+    {
+      parentCapability: "eth_accounts",
+      invoker: origin,
+      caveats: account
+        ? [
+            {
+              type: "restrictReturnedAccounts",
+              value: [account],
+            },
+          ]
+        : [],
+      date: Date.now(),
+    },
+  ];
+}
+
 async function readConnection(origin: string): Promise<StoredConnection | undefined> {
   return (await getConnections())[origin];
 }
@@ -394,6 +418,8 @@ async function openRequestWindow(
     params: request.params,
     createdAt,
     expiresAt: createdAt + REQUEST_TTL_MS,
+    tabId: request.tabId,
+    frameId: request.frameId,
     respond,
   };
   pendingRequests.set(request.requestId, pending);
@@ -567,12 +593,13 @@ async function handleProviderRequest(message: ProviderRequestMessage, respond: (
     case "eth_accounts":
       respond({ result: await connectedAccountResult(message.origin) });
       return;
+    case "eth_coinbase": {
+      const accounts = await connectedAccountResult(message.origin);
+      respond({ result: accounts[0] ?? null });
+      return;
+    }
     case "wallet_getPermissions":
-      respond({
-        result: (await hasConnection(message.origin))
-          ? [{ parentCapability: "eth_accounts", caveats: [] }]
-          : [],
-      });
+      respond({ result: await permissionsResult(message.origin) });
       return;
     case "wallet_switchEthereumChain": {
       const requested = (message.params?.[0] as { chainId?: string } | undefined)?.chainId;
@@ -626,7 +653,7 @@ async function handleProviderRequest(message: ProviderRequestMessage, respond: (
 }
 
 async function completePendingRequest(requestId: string, response: ProviderResponse): Promise<void> {
-  const pending = pendingRequests.get(requestId);
+  const pending = pendingRequests.get(requestId) ?? (await readPendingProviderRequest(requestId));
   pendingRequests.delete(requestId);
   await deletePendingProviderRequest(requestId);
   await storeProviderResponse(requestId, response);
@@ -642,6 +669,36 @@ async function completePendingRequest(requestId: string, response: ProviderRespo
     } catch {
       // The original content-script port may have disconnected. The relay also
       // polls chrome.storage by request id, so the response is still delivered.
+    }
+  }
+  if (pending?.tabId !== undefined) {
+    try {
+      const payload = {
+        source: "qubitor:provider-response",
+        requestId,
+        result: response.result,
+        error: response.error,
+      };
+      const onDelivered = () => {
+        void recordProviderDiagnostic(chrome.runtime.lastError ? "response:tab-delivery-failed" : "response:tab-delivered", {
+          requestId,
+          origin: pending.origin,
+          method: pending.method,
+          detail: chrome.runtime.lastError?.message,
+        });
+      };
+      if (pending.frameId !== undefined) {
+        chrome.tabs.sendMessage(pending.tabId, payload, { frameId: pending.frameId }, onDelivered);
+      } else {
+        chrome.tabs.sendMessage(pending.tabId, payload, onDelivered);
+      }
+    } catch (error) {
+      void recordProviderDiagnostic("response:tab-delivery-threw", {
+        requestId,
+        origin: pending.origin,
+        method: pending.method,
+        detail: messageOf(error),
+      });
     }
   }
 }
@@ -678,7 +735,7 @@ async function resolvePendingRequest(message: ResolveRequestMessage): Promise<{ 
         pending.origin,
         message.decision === "limited" ? ["view-account", "limited"] : ["view-account", "request-signatures"],
       );
-      await completePendingRequest(message.requestId, { result: [{ parentCapability: "eth_accounts", caveats: [] }] });
+      await completePendingRequest(message.requestId, { result: await permissionsResult(pending.origin) });
       return { ok: true };
     }
 
@@ -789,7 +846,9 @@ chrome.runtime.onConnect.addListener((port) => {
   port.onMessage.addListener((message) => {
     if (message?.kind !== "qubitor:provider-request" || !message.requestId) return;
     activeRequestId = message.requestId as string;
-    void handleProviderRequest(message as ProviderRequestMessage, respondFromPort(activeRequestId));
+    const tabId = port.sender?.tab?.id;
+    const frameId = port.sender?.frameId;
+    void handleProviderRequest({ ...(message as ProviderRequestMessage), tabId, frameId }, respondFromPort(activeRequestId));
   });
 
   port.onDisconnect.addListener(() => {
