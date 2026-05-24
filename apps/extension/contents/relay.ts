@@ -30,10 +30,19 @@ window.addEventListener("message", (event: MessageEvent<ProviderBridgeRequest>) 
 
   const port = chrome.runtime.connect({ name: "qubitor:provider" });
   let settled = false;
+  let pollId: number | undefined;
+  let timeoutId: number | undefined;
 
-  port.onMessage.addListener((response) => {
-    if (response?.source !== "qubitor:provider-response" || response.requestId !== data.requestId) return;
+  const settle = (response: { result?: unknown; error?: { code: number; message: string } }) => {
+    if (settled) return;
     settled = true;
+    if (pollId !== undefined) window.clearInterval(pollId);
+    if (timeoutId !== undefined) window.clearTimeout(timeoutId);
+    try {
+      port.disconnect();
+    } catch {
+      // The background worker may already have closed the port after posting.
+    }
     window.postMessage(
       {
         source: "qubitor:provider-response",
@@ -43,22 +52,36 @@ window.addEventListener("message", (event: MessageEvent<ProviderBridgeRequest>) 
       },
       "*",
     );
+  };
+
+  const pollStoredResponse = () => {
+    chrome.runtime.sendMessage(
+      { kind: "qubitor:get-provider-response", requestId: data.requestId },
+      (response: { ok?: boolean; response?: { result?: unknown; error?: { code: number; message: string } } }) => {
+        if (settled || chrome.runtime.lastError || !response?.response) return;
+        settle(response.response);
+      },
+    );
+  };
+
+  port.onMessage.addListener((response) => {
+    if (response?.source !== "qubitor:provider-response" || response.requestId !== data.requestId) return;
+    settle({ result: response.result, error: response.error });
   });
 
   port.onDisconnect.addListener(() => {
-    if (settled) return;
-    window.postMessage(
-      {
-        source: "qubitor:provider-response",
-        requestId: data.requestId,
-        error: {
-          code: 5000,
-          message: chrome.runtime.lastError?.message ?? "Qubitor extension request channel closed.",
-        },
-      },
-      "*",
-    );
+    if (!settled) pollStoredResponse();
   });
+
+  pollId = window.setInterval(pollStoredResponse, 500);
+  timeoutId = window.setTimeout(() => {
+    settle({
+      error: {
+        code: 5000,
+        message: "Qubitor extension request timed out before the wallet returned a decision.",
+      },
+    });
+  }, 590_000);
 
   port.postMessage({
     kind: "qubitor:provider-request",

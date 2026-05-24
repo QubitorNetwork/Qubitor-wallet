@@ -27,6 +27,9 @@ const CHAIN_ID_HEX = `0x${CHAIN_ID.toString(16)}`;
 const RPC_URL = env?.PLASMO_PUBLIC_QUBITOR_RPC_URL ?? defaultQubitorRpcUrl(CHAIN_ID);
 const CONNECTIONS_KEY = "qubitor:connections";
 const EXTENSION_WALLET_STORAGE_KEY = "qubitor.extension.pq-wallet.encrypted.v1";
+const PENDING_PROVIDER_REQUESTS_KEY = "qubitor:provider-pending.v1";
+const PROVIDER_RESPONSES_KEY = "qubitor:provider-responses.v1";
+const REQUEST_TTL_MS = 10 * 60 * 1000;
 
 type RequestType = "connect" | "tx" | "sign";
 type Decision = "approve" | "limited" | "reject";
@@ -75,10 +78,19 @@ interface ProviderResponse {
 }
 
 interface PendingRequest {
+  requestId: string;
   method: string;
   origin: string;
   params?: unknown[];
-  respond: (response: ProviderResponse) => void;
+  createdAt: number;
+  expiresAt: number;
+  respond?: (response: ProviderResponse) => void | Promise<void>;
+}
+
+interface StoredProviderResponse {
+  response: ProviderResponse;
+  createdAt: number;
+  expiresAt: number;
 }
 
 interface ParsedTransactionRequest {
@@ -153,6 +165,75 @@ function isRpcPassthroughMethod(method: string): boolean {
     "eth_getTransactionCount",
     "eth_getTransactionReceipt",
   ].includes(method);
+}
+
+function nowMs() {
+  return Date.now();
+}
+
+function isExpired(expiresAt?: number): boolean {
+  return typeof expiresAt === "number" && expiresAt <= nowMs();
+}
+
+async function getPendingProviderRequests(): Promise<Record<string, PendingRequest>> {
+  return new Promise((resolve) => {
+    chrome.storage.local.get(PENDING_PROVIDER_REQUESTS_KEY, (items) => {
+      const raw = (items[PENDING_PROVIDER_REQUESTS_KEY] as Record<string, PendingRequest> | undefined) ?? {};
+      const active = Object.fromEntries(Object.entries(raw).filter(([, request]) => !isExpired(request.expiresAt)));
+      if (Object.keys(active).length !== Object.keys(raw).length) {
+        void chrome.storage.local.set({ [PENDING_PROVIDER_REQUESTS_KEY]: active });
+      }
+      resolve(active);
+    });
+  });
+}
+
+async function savePendingProviderRequest(request: PendingRequest): Promise<void> {
+  const requests = await getPendingProviderRequests();
+  const { respond: _respond, ...stored } = request;
+  requests[request.requestId] = stored;
+  await chrome.storage.local.set({ [PENDING_PROVIDER_REQUESTS_KEY]: requests });
+}
+
+async function readPendingProviderRequest(requestId: string): Promise<PendingRequest | undefined> {
+  const request = (await getPendingProviderRequests())[requestId];
+  if (!request || isExpired(request.expiresAt)) return undefined;
+  return request;
+}
+
+async function deletePendingProviderRequest(requestId: string): Promise<void> {
+  const requests = await getPendingProviderRequests();
+  delete requests[requestId];
+  await chrome.storage.local.set({ [PENDING_PROVIDER_REQUESTS_KEY]: requests });
+}
+
+async function getStoredProviderResponses(): Promise<Record<string, StoredProviderResponse>> {
+  return new Promise((resolve) => {
+    chrome.storage.local.get(PROVIDER_RESPONSES_KEY, (items) => {
+      const raw = (items[PROVIDER_RESPONSES_KEY] as Record<string, StoredProviderResponse> | undefined) ?? {};
+      const active = Object.fromEntries(Object.entries(raw).filter(([, entry]) => !isExpired(entry.expiresAt)));
+      if (Object.keys(active).length !== Object.keys(raw).length) {
+        void chrome.storage.local.set({ [PROVIDER_RESPONSES_KEY]: active });
+      }
+      resolve(active);
+    });
+  });
+}
+
+async function storeProviderResponse(requestId: string, response: ProviderResponse): Promise<void> {
+  const responses = await getStoredProviderResponses();
+  responses[requestId] = {
+    response,
+    createdAt: nowMs(),
+    expiresAt: nowMs() + REQUEST_TTL_MS,
+  };
+  await chrome.storage.local.set({ [PROVIDER_RESPONSES_KEY]: responses });
+}
+
+async function readProviderResponse(requestId: string): Promise<StoredProviderResponse | undefined> {
+  const response = (await getStoredProviderResponses())[requestId];
+  if (!response || isExpired(response.expiresAt)) return undefined;
+  return response;
 }
 
 function getConnections(): Promise<Record<string, StoredConnection>> {
@@ -256,13 +337,23 @@ async function rpcPassthrough(method: string, params: unknown[] = []): Promise<P
   }
 }
 
-function openRequestWindow(type: RequestType, request: ProviderRequestMessage, respond: (response: ProviderResponse) => void) {
-  pendingRequests.set(request.requestId, {
+async function openRequestWindow(
+  type: RequestType,
+  request: ProviderRequestMessage,
+  respond: (response: ProviderResponse) => void | Promise<void>,
+) {
+  const createdAt = nowMs();
+  const pending: PendingRequest = {
+    requestId: request.requestId,
     method: request.method,
     origin: request.origin,
     params: request.params,
+    createdAt,
+    expiresAt: createdAt + REQUEST_TTL_MS,
     respond,
-  });
+  };
+  pendingRequests.set(request.requestId, pending);
+  await savePendingProviderRequest(pending);
 
   const params = new URLSearchParams({
     type,
@@ -275,6 +366,7 @@ function openRequestWindow(type: RequestType, request: ProviderRequestMessage, r
   chrome.windows.create({ url, type: "popup", width: 420, height: 720 }, () => {
     if (chrome.runtime.lastError) {
       pendingRequests.delete(request.requestId);
+      void deletePendingProviderRequest(request.requestId);
       respond(providerError(5000, chrome.runtime.lastError.message ?? "Could not open Qubitor review window."));
     }
   });
@@ -311,7 +403,7 @@ function parseTransactionRequest(params: unknown[] = []): ParsedTransactionReque
 }
 
 async function getPendingRequestDetails(requestId: string): Promise<PendingRequestDetails | undefined> {
-  const pending = pendingRequests.get(requestId);
+  const pending = pendingRequests.get(requestId) ?? (await readPendingProviderRequest(requestId));
   if (!pending) return undefined;
   const type = requestTypeForMethod(pending.method);
   if (!type) return undefined;
@@ -405,20 +497,34 @@ async function handleProviderRequest(message: ProviderRequestMessage, respond: (
       respond({ result: accounts });
       return;
     }
-    openRequestWindow(type, message, respond);
+    await openRequestWindow(type, message, respond);
     return;
   }
 
   respond(providerError(-32601, `Qubitor provider does not support ${message.method} yet.`));
 }
 
+async function completePendingRequest(requestId: string, response: ProviderResponse): Promise<void> {
+  const pending = pendingRequests.get(requestId);
+  pendingRequests.delete(requestId);
+  await deletePendingProviderRequest(requestId);
+  await storeProviderResponse(requestId, response);
+  if (pending?.respond) {
+    try {
+      await pending.respond(response);
+    } catch {
+      // The original content-script port may have disconnected. The relay also
+      // polls chrome.storage by request id, so the response is still delivered.
+    }
+  }
+}
+
 async function resolvePendingRequest(message: ResolveRequestMessage): Promise<{ ok: boolean; error?: string }> {
-  const pending = pendingRequests.get(message.requestId);
+  const pending = pendingRequests.get(message.requestId) ?? (await readPendingProviderRequest(message.requestId));
   if (!pending) return { ok: false, error: "Qubitor request expired. Please try again." };
 
   if (message.decision === "reject") {
-    pendingRequests.delete(message.requestId);
-    pending.respond(providerError(4001, "User rejected the Qubitor request."));
+    await completePendingRequest(message.requestId, providerError(4001, "User rejected the Qubitor request."));
     return { ok: true };
   }
 
@@ -432,8 +538,7 @@ async function resolvePendingRequest(message: ResolveRequestMessage): Promise<{ 
         pending.origin,
         message.decision === "limited" ? ["view-account", "limited"] : ["view-account", "request-signatures"],
       );
-      pendingRequests.delete(message.requestId);
-      pending.respond({ result: [account] });
+      await completePendingRequest(message.requestId, { result: [account] });
       return { ok: true };
     }
 
@@ -446,8 +551,7 @@ async function resolvePendingRequest(message: ResolveRequestMessage): Promise<{ 
         pending.origin,
         message.decision === "limited" ? ["view-account", "limited"] : ["view-account", "request-signatures"],
       );
-      pendingRequests.delete(message.requestId);
-      pending.respond({ result: [{ parentCapability: "eth_accounts", caveats: [] }] });
+      await completePendingRequest(message.requestId, { result: [{ parentCapability: "eth_accounts", caveats: [] }] });
       return { ok: true };
     }
 
@@ -468,8 +572,7 @@ async function resolvePendingRequest(message: ResolveRequestMessage): Promise<{ 
         valueWei: tx.valueWei,
         data: tx.data,
       });
-      pendingRequests.delete(message.requestId);
-      pending.respond({ result: receipt.transactionHash });
+      await completePendingRequest(message.requestId, { result: receipt.transactionHash });
       return { ok: true };
     }
 
@@ -525,11 +628,15 @@ chrome.runtime.onConnect.addListener((port) => {
   let activeRequestId: string | undefined;
   let responded = false;
 
-  const respondFromPort = (requestId: string) => (response: ProviderResponse) => {
+  const respondFromPort = (requestId: string) => async (response: ProviderResponse) => {
     if (responded) return;
     responded = true;
-    pendingRequests.delete(requestId);
-    postProviderResponse(port, requestId, response);
+    await storeProviderResponse(requestId, response);
+    try {
+      postProviderResponse(port, requestId, response);
+    } catch {
+      // The relay polls the stored response when the live port is gone.
+    }
   };
 
   port.onMessage.addListener((message) => {
@@ -540,7 +647,10 @@ chrome.runtime.onConnect.addListener((port) => {
 
   port.onDisconnect.addListener(() => {
     if (!responded && activeRequestId) {
-      pendingRequests.delete(activeRequestId);
+      const pending = pendingRequests.get(activeRequestId);
+      if (pending) {
+        pendingRequests.set(activeRequestId, { ...pending, respond: undefined });
+      }
     }
   });
 });
@@ -568,6 +678,12 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.kind === "qubitor:get-pending-request") {
     void getPendingRequestDetails(message.requestId as string).then((request) => {
       sendResponse({ ok: Boolean(request), request, error: request ? undefined : "Qubitor request expired." });
+    });
+    return true;
+  }
+  if (message?.kind === "qubitor:get-provider-response") {
+    void readProviderResponse(message.requestId as string).then((entry) => {
+      sendResponse({ ok: Boolean(entry), response: entry?.response });
     });
     return true;
   }
