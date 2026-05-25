@@ -704,6 +704,23 @@ async function handleProviderRequest(message: ProviderRequestMessage, respond: (
 
   const type = requestTypeForMethod(message.method);
   if (type) {
+    if (type === "connect") {
+      const account = await currentAccountAddress();
+      if (account) {
+        await setConnection(message.origin, ["view-account", "request-signatures"]);
+        await recordProviderDiagnostic("connect:auto-approved-existing-wallet", {
+          requestId: message.requestId,
+          origin: message.origin,
+          method: message.method,
+          detail: account,
+        });
+        respond({
+          result: message.method === "wallet_requestPermissions" ? await permissionsResult(message.origin) : [account],
+        });
+        return;
+      }
+    }
+
     if (type !== "connect" && !(await hasConnection(message.origin))) {
       respond(providerError(4100, "Connect this site to Quanta Wallet before signing requests."));
       return;
