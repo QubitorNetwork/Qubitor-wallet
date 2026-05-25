@@ -134,6 +134,7 @@ interface PendingRequestDetails {
 
 const MAIN_WORLD_PROVIDER_SCRIPT_ID = "contentsInjectProvider";
 const pendingRequests = new Map<string, PendingRequest>();
+const approvalWindowIds = new Map<string, number>();
 
 function hostnameFromOrigin(origin: string): string {
   try {
@@ -504,6 +505,7 @@ async function openRequestWindow(
       openFallbackTab(detail);
       return;
     }
+    approvalWindowIds.set(request.requestId, createdWindow.id);
     void recordProviderDiagnostic("approval:open", {
       requestId: request.requestId,
       origin: request.origin,
@@ -511,6 +513,76 @@ async function openRequestWindow(
       detail: `window:${createdWindow.id}`,
     });
   });
+}
+
+async function ensureRequestWindow(requestId: string): Promise<{ ok: boolean; error?: string }> {
+  const pending = pendingRequests.get(requestId) ?? (await readPendingProviderRequest(requestId));
+  if (!pending) return { ok: false, error: "Qubitor request expired." };
+  const type = requestTypeForMethod(pending.method);
+  if (!type) return { ok: false, error: `Qubitor provider does not support ${pending.method}.` };
+
+  const params = new URLSearchParams({
+    type,
+    requestId: pending.requestId,
+    origin: pending.origin,
+    method: pending.method,
+  });
+  const url = chrome.runtime.getURL(`tabs/request.html?${params.toString()}`);
+
+  const openNewWindow = () => {
+    chrome.windows.create({ url, type: "popup", width: 420, height: 720, focused: true }, (createdWindow) => {
+      if (chrome.runtime.lastError) {
+        const detail = chrome.runtime.lastError.message ?? "Could not open Quanta Wallet approval window.";
+        void recordProviderDiagnostic("approval:ensure-open-failed", {
+          requestId: pending.requestId,
+          origin: pending.origin,
+          method: pending.method,
+          detail,
+        });
+        void completePendingRequest(pending.requestId, providerError(5000, detail));
+        return;
+      }
+      if (createdWindow?.id === undefined) {
+        const detail = "Chrome did not return a Quanta Wallet approval window.";
+        void recordProviderDiagnostic("approval:ensure-open-empty", {
+          requestId: pending.requestId,
+          origin: pending.origin,
+          method: pending.method,
+          detail,
+        });
+        void completePendingRequest(pending.requestId, providerError(5000, detail));
+        return;
+      }
+      approvalWindowIds.set(pending.requestId, createdWindow.id);
+      void recordProviderDiagnostic("approval:ensure-open", {
+        requestId: pending.requestId,
+        origin: pending.origin,
+        method: pending.method,
+        detail: `window:${createdWindow.id}`,
+      });
+    });
+  };
+
+  const existingWindowId = approvalWindowIds.get(requestId);
+  if (existingWindowId !== undefined) {
+    chrome.windows.update(existingWindowId, { focused: true }, (window) => {
+      if (chrome.runtime.lastError || !window) {
+        approvalWindowIds.delete(requestId);
+        openNewWindow();
+        return;
+      }
+      void recordProviderDiagnostic("approval:ensure-focus", {
+        requestId: pending.requestId,
+        origin: pending.origin,
+        method: pending.method,
+        detail: `window:${existingWindowId}`,
+      });
+    });
+    return { ok: true };
+  }
+
+  openNewWindow();
+  return { ok: true };
 }
 
 function quantityToBigInt(value: unknown, fallback = 0n): bigint {
@@ -801,6 +873,12 @@ chrome.runtime.onInstalled.addListener((details) => {
   console.log("[qubitor] extension installed");
 });
 
+chrome.windows.onRemoved.addListener((windowId) => {
+  for (const [requestId, approvalWindowId] of approvalWindowIds.entries()) {
+    if (approvalWindowId === windowId) approvalWindowIds.delete(requestId);
+  }
+});
+
 function postProviderResponse(
   port: chrome.runtime.Port,
   requestId: string,
@@ -848,7 +926,18 @@ chrome.runtime.onConnect.addListener((port) => {
     activeRequestId = message.requestId as string;
     const tabId = port.sender?.tab?.id;
     const frameId = port.sender?.frameId;
-    void handleProviderRequest({ ...(message as ProviderRequestMessage), tabId, frameId }, respondFromPort(activeRequestId));
+    void handleProviderRequest({ ...(message as ProviderRequestMessage), tabId, frameId }, respondFromPort(activeRequestId)).catch(
+      async (error) => {
+        const detail = messageOf(error);
+        await recordProviderDiagnostic("request:handler-threw", {
+          requestId: activeRequestId,
+          origin: (message as ProviderRequestMessage).origin,
+          method: (message as ProviderRequestMessage).method,
+          detail,
+        });
+        await respondFromPort(activeRequestId ?? (message.requestId as string))(providerError(5000, detail));
+      },
+    );
   });
 
   port.onDisconnect.addListener(() => {
@@ -874,7 +963,16 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
   if (message?.kind === "qubitor:provider-request") {
-    void handleProviderRequest(message as ProviderRequestMessage, sendResponse);
+    void handleProviderRequest(message as ProviderRequestMessage, sendResponse).catch(async (error) => {
+      const detail = messageOf(error);
+      await recordProviderDiagnostic("request:handler-threw", {
+        requestId: (message as ProviderRequestMessage).requestId,
+        origin: (message as ProviderRequestMessage).origin,
+        method: (message as ProviderRequestMessage).method,
+        detail,
+      });
+      sendResponse(providerError(5000, detail));
+    });
     return true;
   }
   if (message?.kind === "qubitor:resolve-request") {
@@ -885,6 +983,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     void getPendingRequestDetails(message.requestId as string).then((request) => {
       sendResponse({ ok: Boolean(request), request, error: request ? undefined : "Qubitor request expired." });
     });
+    return true;
+  }
+  if (message?.kind === "qubitor:ensure-request-window") {
+    void ensureRequestWindow(message.requestId as string).then(sendResponse);
     return true;
   }
   if (message?.kind === "qubitor:get-provider-response") {
