@@ -6,6 +6,7 @@
     "gen:icons": "tauri icon ../mobile/assets/icon.png",
     "dev": "tauri dev",
     "build": "tauri build",
+    "build:windows-store": "tauri build --bundles msi,nsis",
     "tauri": "tauri"
   },
   "devDependencies": {

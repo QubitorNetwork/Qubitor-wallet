@@ -60,6 +60,24 @@ Produces (per host OS): `.dmg`/`.app` (macOS), `.msi` + NSIS `.exe` (Windows),
 `beforeBuildCommand` runs `pnpm --filter @qubitor/mobile build:web` first, so
 the bundled frontend is always a fresh `apps/mobile/dist` export.
 
+Windows Store / Partner Center installers can be built on Windows with:
+
+```sh
+pnpm --filter @qubitor/desktop build:windows-store
+```
+
+CI uses the [`Windows Store`](../../.github/workflows/windows-store.yml)
+workflow to build those installers on `windows-latest`, optionally sign them
+when Authenticode secrets are configured, and attach stable-named assets to a
+GitHub Release for Partner Center:
+
+- `quanta-wallet-windows-store-x64.msi`
+- `quanta-wallet-windows-store-x64-setup.exe`
+- `SHA256SUMS-WINDOWS.txt`
+
+Once a GitHub Release asset URL has been submitted to Partner Center, do not
+replace that file. Create a new release tag for future Microsoft Store updates.
+
 ## Build the Ubuntu Store snap
 
 The root [`snapcraft.yaml`](../../snapcraft.yaml) wraps the Tauri `.deb` bundle

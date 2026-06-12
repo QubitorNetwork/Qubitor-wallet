@@ -1,0 +1,122 @@
+name: Windows Store
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: GitHub Release tag to attach the Windows Store installers to.
+        required: true
+        default: v0.0.24
+        type: string
+      upload_to_release:
+        description: Attach the built installers to the GitHub Release.
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  windows-store:
+    name: windows store installers
+    runs-on: windows-latest
+    env:
+      WINDOWS_CERTIFICATE_PFX_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_PFX_BASE64 }}
+      WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.18.2
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Windows MSI and NSIS installers
+        uses: tauri-apps/tauri-action@v0
+        with:
+          projectPath: apps/desktop
+          args: --bundles msi,nsis
+
+      - name: Optionally sign installers
+        if: ${{ env.WINDOWS_CERTIFICATE_PFX_BASE64 != '' && env.WINDOWS_CERTIFICATE_PASSWORD != '' }}
+        shell: pwsh
+        run: |
+          $certPath = Join-Path $env:RUNNER_TEMP "quanta-wallet-signing.pfx"
+          [IO.File]::WriteAllBytes($certPath, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE_PFX_BASE64))
+          $signtool = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin" -Recurse -Filter signtool.exe |
+            Where-Object { $_.FullName -match "\\x64\\signtool.exe$" } |
+            Sort-Object FullName |
+            Select-Object -Last 1
+          if (-not $signtool) {
+            throw "signtool.exe not found"
+          }
+          $bundle = "apps/desktop/src-tauri/target/release/bundle"
+          $installers = Get-ChildItem $bundle -Recurse -File -Include *.msi,*.exe
+          if (-not $installers) {
+            throw "No Windows installers found to sign"
+          }
+          foreach ($installer in $installers) {
+            & $signtool.FullName sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /f $certPath /p $env:WINDOWS_CERTIFICATE_PASSWORD $installer.FullName
+            if ($LASTEXITCODE -ne 0) {
+              throw "Signing failed for $($installer.FullName)"
+            }
+          }
+
+      - name: Stage Partner Center assets
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force out | Out-Null
+          $bundle = "apps/desktop/src-tauri/target/release/bundle"
+          $msi = Get-ChildItem $bundle -Recurse -Filter *.msi | Select-Object -First 1
+          $exe = Get-ChildItem $bundle -Recurse -Filter *.exe |
+            Where-Object { $_.FullName -match "\\nsis\\" -or $_.Name -match "setup" } |
+            Select-Object -First 1
+          if (-not $msi) {
+            throw "MSI installer was not produced"
+          }
+          if (-not $exe) {
+            throw "NSIS EXE installer was not produced"
+          }
+          Copy-Item $msi.FullName "out/quanta-wallet-windows-store-x64.msi"
+          Copy-Item $exe.FullName "out/quanta-wallet-windows-store-x64-setup.exe"
+          Get-ChildItem out -File | ForEach-Object {
+            $hash = Get-FileHash $_.FullName -Algorithm SHA256
+            "$($hash.Hash.ToLower())  $($_.Name)"
+          } | Set-Content "out/SHA256SUMS-WINDOWS.txt"
+          Get-ChildItem out -File | Format-Table Name, Length
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: quanta-wallet-windows-store
+          path: out/*
+          if-no-files-found: error
+
+      - name: Attach installers to GitHub Release
+        if: ${{ inputs.upload_to_release }}
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:RELEASE_TAG)) {
+            throw "release_tag is required when upload_to_release is true"
+          }
+          gh release view $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY *> $null
+          if ($LASTEXITCODE -ne 0) {
+            throw "GitHub Release $env:RELEASE_TAG does not exist. Publish the release first so Partner Center can fetch a public asset URL."
+          }
+          gh release upload $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --clobber out/*

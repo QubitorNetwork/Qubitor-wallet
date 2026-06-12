@@ -108,6 +108,44 @@ ML-DSA-65 signing are identical to mobile; only key-at-rest differs.
 Local build: `pnpm --filter @qubitor/desktop build` (see
 `apps/desktop/README.md`).
 
+### Microsoft Store / Windows Store
+
+Use the Microsoft Store **MSI/EXE unpackaged Win32 app** path first. Quanta
+Wallet is a Tauri desktop app, so Partner Center can test a normal offline
+Windows installer URL without us converting the app to MSIX.
+
+Repo support:
+
+- `pnpm --filter @qubitor/desktop build:windows-store` builds only the Windows
+  `.msi` and NSIS `.exe` bundles.
+- `.github/workflows/windows-store.yml` runs on `windows-latest`, stages stable
+  Partner Center asset names, uploads a workflow artifact, and can attach the
+  assets to a GitHub Release:
+  - `quanta-wallet-windows-store-x64.msi`
+  - `quanta-wallet-windows-store-x64-setup.exe`
+  - `SHA256SUMS-WINDOWS.txt`
+
+Run the workflow manually:
+
+1. Open **Actions → Windows Store → Run workflow**.
+2. Set `release_tag` to the immutable release tag, for example `v0.0.24`.
+3. Leave `upload_to_release=true`.
+4. Use the GitHub Release asset URL in Partner Center:
+   `https://github.com/QubitorNetwork/Qubitor-wallet/releases/download/v0.0.24/quanta-wallet-windows-store-x64.msi`
+
+Microsoft expects the installer behind a submitted URL to remain unchanged.
+After you submit a URL to Partner Center, do not rerun the workflow with the
+same tag and `--clobber` that asset. For app updates, cut a new release tag and
+submit the new URL.
+
+Optional Authenticode signing:
+
+- Add `WINDOWS_CERTIFICATE_PFX_BASE64` and `WINDOWS_CERTIFICATE_PASSWORD` as
+  GitHub repository secrets.
+- The workflow will sign `.msi` and `.exe` installers before staging them.
+- Without these secrets the installers are still built, but are unsigned and
+  may receive SmartScreen warnings outside the Store.
+
 ## CI / Release (GitHub Actions)
 
 - `.github/workflows/ci.yml` — on push to `main` + every PR: `pnpm install
