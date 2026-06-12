@@ -76,6 +76,7 @@ ML-DSA-65 signing are identical to mobile; only key-at-rest differs.
 | macOS | `.dmg`, `.app` | Keychain |
 | Windows | `.msi`, NSIS `.exe` | Credential Manager |
 | Ubuntu | `.AppImage`, `.deb` | Secret Service (libsecret) |
+| Ubuntu Store | `.snap` | Snap private user data, passcode-encrypted |
 
 - [ ] **Standalone keystore security review (mainnet blocker).** Desktop owns
       its own ML-DSA key. The blob is passcode-encrypted by `@qubitor/pq-crypto`
@@ -86,6 +87,17 @@ ML-DSA-65 signing are identical to mobile; only key-at-rest differs.
 - [ ] **Ubuntu support matrix.** Tauri v2 needs `webkit2gtk-4.1` → clean on
       **Ubuntu 22.04 / 24.04**. 20.04 is unsupported (EOL, old webkitgtk).
       `.AppImage` gives the widest forward compatibility; `.deb` targets 22.04+.
+- [ ] **Snap Store / Ubuntu Store.** Root `snapcraft.yaml` builds the strict
+      `quanta-wallet` snap from the Tauri `.deb` bundle. Snap strict
+      confinement does not rely on Secret Service; the already passcode-
+      encrypted profile record is stored under `$SNAP_USER_DATA`, so extension-
+      style wallet persistence survives app restarts and snap updates without a
+      privileged `password-manager-service` connection. Before publishing:
+      `snapcraft login`, `snapcraft register quanta-wallet`, then add
+      `SNAPCRAFT_STORE_CREDENTIALS` to GitHub secrets from
+      `snapcraft export-login --snaps quanta-wallet --channels edge,beta,candidate,stable -`.
+      Build locally with `snapcraft`; test with
+      `sudo snap install ./quanta-wallet_0.0.24_amd64.snap --dangerous`.
 - [ ] **Unsigned by default.** macOS `.app`/`.dmg` is unsigned → Gatekeeper
       "unidentified developer"; Windows `.exe`/`.msi` → SmartScreen. Real fix
       = Apple Developer ID cert + Windows Authenticode cert wired into
@@ -112,6 +124,10 @@ Local build: `pnpm --filter @qubitor/desktop build` (see
   - Final job waits for Android too, downloads every produced artifact,
     attaches all apps plus `SHA256SUMS`, and publishes/updates the release.
     **No iOS** (no Apple account).
+- `.github/workflows/snapcraft.yml` — on a `v*` tag, builds the Snapcraft
+  package as a workflow artifact. Manual dispatch can also publish to the Snap
+  Store channel selected in the workflow inputs when `publish=true` and the
+  `SNAPCRAFT_STORE_CREDENTIALS` secret is configured.
 
 Tag a release: `git tag v0.0.1 && git push origin v0.0.1`. Verify downloads
 with `sha256sum -c SHA256SUMS` after download.

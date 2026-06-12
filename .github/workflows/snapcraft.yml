@@ -1,0 +1,52 @@
+name: Snapcraft
+
+on:
+  workflow_dispatch:
+    inputs:
+      release:
+        description: Snap Store channel to publish to when publish is enabled.
+        required: true
+        default: edge
+        type: choice
+        options:
+          - edge
+          - beta
+          - candidate
+          - stable
+      publish:
+        description: Upload the built snap to the selected Snap Store channel.
+        required: true
+        default: false
+        type: boolean
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  snap:
+    name: build snap
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build snap
+        uses: snapcore/action-build@v1
+        id: snapcraft
+
+      - name: Upload snap artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: quanta-wallet-snap
+          path: ${{ steps.snapcraft.outputs.snap }}
+          if-no-files-found: error
+
+      - name: Publish snap
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish }}
+        uses: snapcore/action-publish@v1
+        env:
+          SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
+        with:
+          snap: ${{ steps.snapcraft.outputs.snap }}
+          release: ${{ inputs.release }}

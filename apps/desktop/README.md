@@ -18,6 +18,12 @@ commands ([src-tauri/src/lib.rs](src-tauri/src/lib.rs)):
 | macOS   | Keychain                      |
 | Windows | Credential Manager            |
 | Linux   | Secret Service (libsecret)    |
+| Snap    | `$SNAP_USER_DATA` encrypted blob store |
+
+Snap builds run under strict confinement. Instead of requiring the privileged
+`password-manager-service` interface, the Tauri vault stores the already
+passcode-encrypted wallet records in the snap's private user data directory.
+Non-Snap Linux builds continue to use Secret Service.
 
 The frontend reaches these through `@qubitor/keystore`'s desktop `KeyVault`
 ([apps/mobile/lib/tauriKeyVault.ts](../mobile/lib/tauriKeyVault.ts)), selected
@@ -53,6 +59,22 @@ Produces (per host OS): `.dmg`/`.app` (macOS), `.msi` + NSIS `.exe` (Windows),
 
 `beforeBuildCommand` runs `pnpm --filter @qubitor/mobile build:web` first, so
 the bundled frontend is always a fresh `apps/mobile/dist` export.
+
+## Build the Ubuntu Store snap
+
+The root [`snapcraft.yaml`](../../snapcraft.yaml) wraps the Tauri `.deb` bundle
+into a strict Snap package:
+
+```sh
+sudo snap install snapcraft --classic
+snapcraft
+sudo snap install ./quanta-wallet_0.0.24_amd64.snap --dangerous
+quanta-wallet
+```
+
+Publishing is handled by the manual
+[`Snapcraft`](../../.github/workflows/snapcraft.yml) workflow once
+`SNAPCRAFT_STORE_CREDENTIALS` is configured in GitHub secrets.
 
 ## Icons
 

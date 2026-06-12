@@ -1,0 +1,78 @@
+name: quanta-wallet
+title: Quanta Wallet
+base: core22
+version: "0.0.24"
+summary: PQ-native Qubitor Network wallet
+description: |
+  Quanta Wallet is the desktop wallet for Qubitor Network. It creates and
+  manages Quanta Accounts, shows live QBT balances, and signs Qubitor
+  transactions with PQ-native account control.
+
+grade: stable
+confinement: strict
+
+package-repositories:
+  - type: apt
+    components: [main]
+    suites: [noble]
+    key-id: 78E1918602959B9C59103100F1831DDAFC42E99D
+    url: http://ppa.launchpad.net/snappy-dev/snapcraft-daily/ubuntu
+
+layout:
+  /usr/libexec/webkit2gtk-4.1:
+    symlink: $SNAP/usr/libexec/webkit2gtk-4.1
+  /usr/lib/x86_64-linux-gnu/webkit2gtk-4.1:
+    symlink: $SNAP/usr/lib/x86_64-linux-gnu/webkit2gtk-4.1
+  /usr/lib/aarch64-linux-gnu/webkit2gtk-4.1:
+    symlink: $SNAP/usr/lib/aarch64-linux-gnu/webkit2gtk-4.1
+  /usr/lib/webkit2gtk-4.1/injected-bundle:
+    symlink: $SNAP/usr/lib/webkit2gtk-4.1/injected-bundle
+
+apps:
+  quanta-wallet:
+    command: usr/bin/quanta-wallet-desktop
+    desktop: usr/share/applications/org.quanta.wallet.desktop
+    extensions: [gnome]
+    plugs:
+      - network
+      - desktop
+      - desktop-legacy
+      - wayland
+      - x11
+      - opengl
+      - browser-support
+      - gsettings
+      - home
+
+parts:
+  quanta-wallet:
+    plugin: dump
+    source: .
+    build-snaps:
+      - node/20/stable
+      - rustup/latest/stable
+    build-packages:
+      - build-essential
+      - curl
+      - dpkg
+      - file
+      - libayatana-appindicator3-dev
+      - libdbus-1-dev
+      - libssl-dev
+      - libwebkit2gtk-4.1-dev
+      - libxdo-dev
+      - librsvg2-dev
+      - pkg-config
+      - wget
+    stage-packages:
+      - libayatana-appindicator3-1
+      - libglu1-mesa
+      - libsecret-1-0
+      - libwebkit2gtk-4.1-0
+    override-build: |
+      set -eux
+      corepack enable
+      corepack prepare pnpm@10.18.2 --activate
+      pnpm install --frozen-lockfile
+      pnpm --filter @qubitor/desktop tauri build -- --bundles deb
+      dpkg -x apps/desktop/src-tauri/target/release/bundle/deb/*.deb "$SNAPCRAFT_PART_INSTALL/"
