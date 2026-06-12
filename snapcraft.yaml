@@ -77,5 +77,5 @@ parts:
       npm install -g pnpm@10.18.2
       rustup default stable
       pnpm install --frozen-lockfile
-      pnpm --filter @qubitor/desktop tauri build -- --bundles deb
+      pnpm --filter @qubitor/desktop tauri build --bundles deb
       dpkg -x apps/desktop/src-tauri/target/release/bundle/deb/*.deb "$SNAPCRAFT_PART_INSTALL/"
