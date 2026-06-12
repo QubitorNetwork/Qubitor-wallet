@@ -1,22 +1,20 @@
 name: quanta-wallet
 title: Quanta Wallet
-base: core22
+base: core24
 version: "0.0.24"
 summary: PQ-native Qubitor Network wallet
 description: |
   Quanta Wallet is the desktop wallet for Qubitor Network. It creates and
   manages Quanta Accounts, shows live QBT balances, and signs Qubitor
   transactions with PQ-native account control.
+license: Proprietary
+website: https://docs.qubitor.org
+contact: mailto:media@qubitor.org
+source-code: https://github.com/QubitorNetwork/Qubitor-wallet
+issues: https://github.com/QubitorNetwork/Qubitor-wallet/issues
 
 grade: stable
 confinement: strict
-
-package-repositories:
-  - type: apt
-    components: [main]
-    suites: [noble]
-    key-id: 78E1918602959B9C59103100F1831DDAFC42E99D
-    url: http://ppa.launchpad.net/snappy-dev/snapcraft-daily/ubuntu
 
 layout:
   /usr/libexec/webkit2gtk-4.1:
@@ -80,12 +78,16 @@ parts:
       pnpm --filter @qubitor/desktop tauri build --bundles deb
       dpkg -x apps/desktop/src-tauri/target/release/bundle/deb/*.deb "$SNAPCRAFT_PART_INSTALL/"
       desktop_dir="$SNAPCRAFT_PART_INSTALL/usr/share/applications"
+      icon_dir="$SNAPCRAFT_PART_INSTALL/usr/share/pixmaps"
       mkdir -p "$desktop_dir"
+      mkdir -p "$icon_dir"
+      cp apps/desktop/src-tauri/icons/icon.png "$icon_dir/quanta-wallet.png"
       existing_desktop="$(find "$desktop_dir" -maxdepth 1 -type f -name "*.desktop" | head -n 1 || true)"
       if [ -n "$existing_desktop" ]; then
         cp "$existing_desktop" "$desktop_dir/quanta-wallet.desktop"
         sed -i -e "s|^Name=.*|Name=Quanta Wallet|" \
           -e "s|^Exec=.*|Exec=quanta-wallet|" \
+          -e "s|^Icon=.*|Icon=quanta-wallet|" \
           "$desktop_dir/quanta-wallet.desktop"
       else
         cat > "$desktop_dir/quanta-wallet.desktop" <<'EOF'
