@@ -31,7 +31,7 @@ layout:
 apps:
   quanta-wallet:
     command: usr/bin/quanta-wallet-desktop
-    desktop: usr/share/applications/org.quanta.wallet.desktop
+    desktop: usr/share/applications/quanta-wallet.desktop
     extensions: [gnome]
     plugs:
       - network
@@ -79,3 +79,23 @@ parts:
       pnpm install --frozen-lockfile
       pnpm --filter @qubitor/desktop tauri build --bundles deb
       dpkg -x apps/desktop/src-tauri/target/release/bundle/deb/*.deb "$SNAPCRAFT_PART_INSTALL/"
+      desktop_dir="$SNAPCRAFT_PART_INSTALL/usr/share/applications"
+      mkdir -p "$desktop_dir"
+      existing_desktop="$(find "$desktop_dir" -maxdepth 1 -type f -name "*.desktop" | head -n 1 || true)"
+      if [ -n "$existing_desktop" ]; then
+        cp "$existing_desktop" "$desktop_dir/quanta-wallet.desktop"
+        sed -i -e "s|^Name=.*|Name=Quanta Wallet|" \
+          -e "s|^Exec=.*|Exec=quanta-wallet|" \
+          "$desktop_dir/quanta-wallet.desktop"
+      else
+        cat > "$desktop_dir/quanta-wallet.desktop" <<'EOF'
+      [Desktop Entry]
+      Name=Quanta Wallet
+      Comment=PQ-native Qubitor Network wallet
+      Exec=quanta-wallet
+      Icon=quanta-wallet
+      Terminal=false
+      Type=Application
+      Categories=Finance;
+      EOF
+      fi
