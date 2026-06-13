@@ -11,8 +11,8 @@ interface Chain {
 }
 
 const CHAINS: Chain[] = [
-  { name: "Qubitor Devnet", badge: "PQ Native" },
   { name: "Qubitor Testnet", badge: "PQ Native" },
+  { name: "Qubitor Devnet", badge: "Local QA" },
 ];
 
 interface Props {

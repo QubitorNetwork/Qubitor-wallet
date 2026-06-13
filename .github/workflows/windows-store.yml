@@ -6,7 +6,7 @@ on:
       release_tag:
         description: GitHub Release tag to attach the Windows Store installers to.
         required: true
-        default: v0.0.24
+        default: v0.0.25
         type: string
       upload_to_release:
         description: Attach the built installers to the GitHub Release.

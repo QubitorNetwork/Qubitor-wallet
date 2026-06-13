@@ -1,5 +1,12 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import type { Hex } from "@qubitor/core";
+import {
+  explorerTxUrl,
+  formatBalanceWei,
+  type QubitorIndexedAddressActivity,
+  type QubitorIndexerEvent,
+  type QubitorIndexerTransaction,
+} from "@qubitor/evm";
 import type { ActivityItem } from "@/lib/runtimeTypes";
 
 const ACTIVITY_STORAGE_PREFIX = "quanta.wallet.activity.v1";
@@ -9,6 +16,12 @@ export interface WalletActivityItem extends ActivityItem {
   occurredAt: string;
   chainId: number;
   accountAddress?: Hex;
+  source?: "local" | "indexer" | "merged";
+  direction?: "sent" | "received" | "self" | "unknown";
+  blockNumber?: number | string;
+  explorerUrl?: string;
+  labels?: string[];
+  indexedAt?: string;
   hash?: Hex;
   displayHash?: string;
   from?: string;
@@ -48,6 +61,125 @@ export function formatActivityTimestamp(occurredAt: string, now = Date.now()): s
   if (days === 1) return "Yesterday";
   if (days < 7) return `${days}d ago`;
   return new Date(time).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+function normalizeStatus(value?: string): WalletActivityItem["status"] {
+  if (!value) return "success";
+  const status = value.toLowerCase();
+  if (status.includes("pending")) return "pending";
+  if (status.includes("fail") || status.includes("revert")) return "failed";
+  return "success";
+}
+
+function normalizeDirection(
+  tx: Pick<QubitorIndexerTransaction, "from" | "to">,
+  accountAddress?: Hex,
+): NonNullable<WalletActivityItem["direction"]> {
+  if (!accountAddress) return "unknown";
+  const account = accountAddress.toLowerCase();
+  const fromMatches = tx.from?.toLowerCase() === account;
+  const toMatches = tx.to?.toLowerCase() === account;
+  if (fromMatches && toMatches) return "self";
+  if (fromMatches) return "sent";
+  if (toMatches) return "received";
+  return "unknown";
+}
+
+function labelsForTransaction(tx: QubitorIndexerTransaction, direction: WalletActivityItem["direction"]): string[] {
+  const tags = (tx.tags ?? []).map((tag) => tag.toLowerCase());
+  const labels = new Set<string>();
+  if (tags.some((tag) => tag.includes("faucet"))) labels.add("Faucet");
+  if (tags.some((tag) => tag.includes("deploy"))) labels.add("Account deployed");
+  if (tags.some((tag) => tag.includes("rotate"))) labels.add("PQ key rotated");
+  if (direction === "sent") labels.add("Sent");
+  if (direction === "received") labels.add("Received");
+  return [...labels];
+}
+
+function labelsForEvent(event: QubitorIndexerEvent): string[] {
+  const haystack = [event.type, ...(event.tags ?? [])].filter(Boolean).join(" ").toLowerCase();
+  if (haystack.includes("faucet")) return ["Faucet"];
+  if (haystack.includes("rotate")) return ["PQ key rotated"];
+  if (haystack.includes("deploy")) return ["Account deployed"];
+  return ["Security"];
+}
+
+function eventTitle(labels: string[]): string {
+  if (labels.includes("PQ key rotated")) return "PQ key rotated";
+  if (labels.includes("Account deployed")) return "Account deployed";
+  if (labels.includes("Faucet")) return "Faucet";
+  return "Security event";
+}
+
+function normalizeIndexedTransaction(
+  tx: QubitorIndexerTransaction,
+  context: WalletActivityContext,
+  indexedAt?: string,
+): WalletActivityItem {
+  const occurredAt = tx.timestamp ?? indexedAt ?? new Date().toISOString();
+  const direction = normalizeDirection(tx, context.accountAddress);
+  const labels = labelsForTransaction(tx, direction);
+  const valueWei = tx.value !== undefined ? BigInt(tx.value) : 0n;
+  const amountLabel = `${formatBalanceWei(valueWei)} QBT`;
+  const title =
+    labels[0] ??
+    (direction === "sent" ? "Sent" : direction === "received" ? "Received" : "Transaction");
+  const status = normalizeStatus(tx.status);
+
+  return {
+    id: tx.hash,
+    type: direction === "received" ? "receive" : "send",
+    title,
+    detail: status === "failed" ? "Transaction failed" : amountLabel,
+    timestamp: formatActivityTimestamp(occurredAt),
+    occurredAt,
+    chainId: context.chainId,
+    accountAddress: context.accountAddress,
+    source: "indexer",
+    direction,
+    blockNumber: tx.blockNumber,
+    indexedAt,
+    explorerUrl: explorerTxUrl(tx.hash, context.chainId),
+    labels,
+    hash: tx.hash,
+    displayHash: shortHash(tx.hash),
+    from: tx.from,
+    to: tx.to,
+    amountLabel,
+    status,
+    badge: status === "failed" ? "Failed" : labels[0] ?? "Indexed",
+  };
+}
+
+function normalizeIndexedEvent(
+  event: QubitorIndexerEvent,
+  context: WalletActivityContext,
+  indexedAt?: string,
+): WalletActivityItem {
+  const occurredAt = event.timestamp ?? indexedAt ?? new Date().toISOString();
+  const hash = event.transactionHash;
+  const labels = labelsForEvent(event);
+  const title = eventTitle(labels);
+  return {
+    id: event.id ?? `${hash ?? event.type ?? "event"}-${event.blockNumber ?? occurredAt}`,
+    type: "security",
+    title,
+    detail: event.type ?? labels.join(", "),
+    timestamp: formatActivityTimestamp(occurredAt),
+    occurredAt,
+    chainId: context.chainId,
+    accountAddress: context.accountAddress,
+    source: "indexer",
+    direction: "unknown",
+    blockNumber: event.blockNumber,
+    indexedAt,
+    explorerUrl: hash ? explorerTxUrl(hash, context.chainId) : undefined,
+    labels,
+    hash,
+    displayHash: shortHash(hash),
+    status: "success",
+    badge: labels[0],
+  };
 }
 
 function normalizeItem(value: unknown): WalletActivityItem | undefined {
@@ -92,6 +224,40 @@ export async function writeWalletActivity(
     .sort((a, b) => Date.parse(b.occurredAt) - Date.parse(a.occurredAt))
     .slice(0, MAX_ACTIVITY_ITEMS);
   await AsyncStorage.setItem(storageKey(context), JSON.stringify(ordered));
+}
+
+export function indexedActivityItems(
+  context: WalletActivityContext,
+  indexed?: QubitorIndexedAddressActivity,
+): WalletActivityItem[] {
+  if (!indexed) return [];
+  return [
+    ...(indexed.transactions ?? []).map((tx) => normalizeIndexedTransaction(tx, context, indexed.indexedAt)),
+    ...(indexed.events ?? []).map((event) => normalizeIndexedEvent(event, context, indexed.indexedAt)),
+  ];
+}
+
+export function mergeWalletActivity(
+  local: readonly WalletActivityItem[],
+  indexed: readonly WalletActivityItem[],
+): WalletActivityItem[] {
+  const merged = new Map<string, WalletActivityItem>();
+  for (const item of local) {
+    merged.set(item.hash?.toLowerCase() ?? item.id, item);
+  }
+  for (const item of indexed) {
+    const key = item.hash?.toLowerCase() ?? item.id;
+    const previous = merged.get(key);
+    merged.set(key, {
+      ...previous,
+      ...item,
+      source: previous ? "merged" : item.source,
+      labels: [...new Set([...(previous?.labels ?? []), ...(item.labels ?? [])])],
+    });
+  }
+  return [...merged.values()]
+    .sort((a, b) => Date.parse(b.occurredAt) - Date.parse(a.occurredAt))
+    .slice(0, MAX_ACTIVITY_ITEMS);
 }
 
 export async function recordWalletActivity(

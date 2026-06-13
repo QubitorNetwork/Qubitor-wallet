@@ -11,7 +11,7 @@ import { Button } from "@/components/Button";
 import { Row } from "@/components/Row";
 import { WarningCard } from "@/components/WarningCard";
 import { colors } from "@qubitor/ui-tokens";
-import { formatBalanceWei, type QubitorSimulationResult } from "@qubitor/evm";
+import { formatBalanceWei, isValidEvmAddress, type QubitorSimulationResult } from "@qubitor/evm";
 import { useAccountSnapshot } from "@/hooks/useAccountSnapshot";
 
 /** Real receipt-style review. The "Simulation" row is driven by a live
@@ -26,22 +26,37 @@ export default function TransactionReview() {
     asset?: string;
   }>();
 
-  const target = params.target?.startsWith("0x")
-    ? (params.target as `0x${string}`)
-    : ("0x000000000000000000000000000000000000dEaD" as const);
-  const valueWei = params.valueWei ?? "250000000000000000";
+  const target = params.target && isValidEvmAddress(params.target) ? (params.target as `0x${string}`) : undefined;
+  const valueWei = params.valueWei;
   const asset = params.asset ?? snapshot.nativeCurrencySymbol;
-  const amountLabel = params.amount ? `${params.amount} ${asset}` : `${formatBalanceWei(BigInt(valueWei))} ${asset}`;
+  let parsedValueWei: bigint | undefined;
+  try {
+    parsedValueWei = valueWei !== undefined ? BigInt(valueWei) : undefined;
+  } catch {
+    parsedValueWei = undefined;
+  }
+  const amountLabel =
+    params.amount && parsedValueWei !== undefined
+      ? `${params.amount} ${asset}`
+      : parsedValueWei !== undefined
+        ? `${formatBalanceWei(parsedValueWei)} ${asset}`
+        : `— ${asset}`;
 
   const [sim, setSim] = useState<QubitorSimulationResult | undefined>();
   const [simError, setSimError] = useState<string | undefined>();
   const [simulating, setSimulating] = useState(true);
 
   useEffect(() => {
+    if (!target || parsedValueWei === undefined || parsedValueWei <= 0n) {
+      setSim(undefined);
+      setSimError("Missing or invalid transfer details.");
+      setSimulating(false);
+      return;
+    }
     let active = true;
     setSimulating(true);
     snapshot
-      .simulateTransfer({ to: target, valueWei: BigInt(valueWei) })
+      .simulateTransfer({ to: target, valueWei: parsedValueWei })
       .then((result) => {
         if (active) setSim(result);
       })
@@ -54,12 +69,14 @@ export default function TransactionReview() {
     return () => {
       active = false;
     };
-  }, [snapshot, target, valueWei]);
+  }, [snapshot, target, parsedValueWei]);
 
   const willRevert = sim ? !sim.willSucceed : false;
   const insufficient = sim?.insufficientFunds ?? false;
   const walletUnlocked = snapshot.walletStatus === "unlocked";
-  const blockConfirm = simulating || willRevert || insufficient || !walletUnlocked || snapshot.pqTxStatus === "requesting";
+  const missingRequired = !target || parsedValueWei === undefined || parsedValueWei <= 0n;
+  const blockConfirm =
+    missingRequired || simulating || willRevert || insufficient || !walletUnlocked || snapshot.pqTxStatus === "requesting";
 
   const simulationValue = simulating
     ? "Simulating…"
@@ -75,9 +92,10 @@ export default function TransactionReview() {
       : `${snapshot.nativeCurrencySymbol} gas`;
 
   const confirm = async () => {
+    if (!target || parsedValueWei === undefined) return;
     if (snapshot.isQubitorDevnet) {
       try {
-        await snapshot.sendPQTransfer({ target, valueWei });
+        await snapshot.sendPQTransfer({ target, valueWei: parsedValueWei.toString() });
       } catch {
         return;
       }
@@ -106,7 +124,7 @@ export default function TransactionReview() {
           </Text>
           <View className="mt-4">
             <Row label="From" value="Quanta Account" showChevron={false} />
-            <Row label="To" value={`${target.slice(0, 6)}…${target.slice(-4)}`} showChevron={false} />
+            <Row label="To" value={target ? `${target.slice(0, 6)}…${target.slice(-4)}` : "Missing"} showChevron={false} />
             <Row label="Asset" value={amountLabel} showChevron={false} />
             <Row label="Network" value={snapshot.chainName} showChevron={false} />
             <Row label="Network fee" value={feeValue} showChevron={false} />
@@ -120,6 +138,13 @@ export default function TransactionReview() {
             severity="critical"
             title="Transaction would revert"
             detail={sim?.revertReason ?? "The node rejected this transfer in simulation."}
+          />
+        ) : null}
+        {missingRequired ? (
+          <WarningCard
+            severity="critical"
+            title="Missing transfer details"
+            detail="Return to Send and enter a valid recipient and amount before reviewing."
           />
         ) : null}
         {insufficient ? (

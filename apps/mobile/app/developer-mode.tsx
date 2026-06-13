@@ -12,6 +12,7 @@ import { Badge } from "@/components/Badge";
 import { colors } from "@qubitor/ui-tokens";
 import { shareDebugBundle } from "@/lib/externalActions";
 import { useAccountSnapshot } from "@/hooks/useAccountSnapshot";
+import type { WalletActivityItem } from "@/lib/walletActivity";
 import { QUBITOR_ACCOUNT_FACTORY, QUBITOR_MLDSA65_PRECOMPILE } from "@qubitor/evm";
 
 function shortHash(value?: string) {
@@ -128,6 +129,23 @@ export default function DeveloperMode() {
                 onPress={() =>
                   shareDebugBundle({
                     account,
+                    chainConfig: {
+                      chainId: snapshot.chainId,
+                      chainName: snapshot.chainName,
+                      nativeCurrencySymbol: snapshot.nativeCurrencySymbol,
+                      rpcUrl: snapshot.rpcUrl ?? "default",
+                      latestBlock: snapshot.latestBlock ?? null,
+                    },
+                    diagnostics: {
+                      walletStatus: snapshot.walletStatus,
+                      snapshotStatus: snapshot.status,
+                      deployment: snapshot.deploymentLabel,
+                      readiness: snapshot.readinessLabel,
+                      error: snapshot.error ?? null,
+                    },
+                    activity: snapshot.activity.filter((item): item is WalletActivityItem =>
+                      "occurredAt" in item && typeof item.occurredAt === "string",
+                    ),
                     latestUserOperation:
                       latestTx && "transactionHash" in latestTx
                         ? { transactionHash: latestTx.transactionHash, status: "status" in latestTx ? latestTx.status : undefined }

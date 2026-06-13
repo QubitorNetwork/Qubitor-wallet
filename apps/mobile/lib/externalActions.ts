@@ -1,11 +1,15 @@
 import { Alert, Linking, Share } from "react-native";
 import { readinessScore, type QubitorAccount } from "@qubitor/core";
 import { explorerTxUrl as qubitorExplorerTxUrl } from "@qubitor/evm";
+import type { WalletActivityItem } from "@/lib/walletActivity";
 
 interface DebugBundleInput {
   account: QubitorAccount;
   latestUserOperation?: Record<string, unknown>;
   logs?: string[];
+  chainConfig?: Record<string, unknown>;
+  diagnostics?: Record<string, unknown>;
+  activity?: WalletActivityItem[];
 }
 
 function stringifyPayload(payload: unknown): string {
@@ -47,9 +51,37 @@ export async function shareDebugBundle(input: DebugBundleInput) {
   const bundle = {
     generatedAt: new Date().toISOString(),
     build: "runtime",
-    account: input.account,
+    account: {
+      label: input.account.label,
+      address: input.account.address,
+      chainId: input.account.chainId,
+      deployed: input.account.deployed,
+      security: input.account.security,
+    },
+    chainConfig: input.chainConfig ?? null,
+    diagnostics: input.diagnostics ?? null,
+    recentActivity: (input.activity ?? []).slice(0, 20).map((item) => ({
+      id: item.id,
+      type: item.type,
+      title: item.title,
+      detail: item.detail,
+      status: item.status,
+      source: item.source,
+      direction: item.direction,
+      hash: item.hash,
+      blockNumber: item.blockNumber,
+      labels: item.labels,
+      occurredAt: item.occurredAt,
+      explorerUrl: item.explorerUrl,
+    })),
     latestUserOperation: input.latestUserOperation ?? null,
     logs: input.logs ?? [],
+    redactions: [
+      "No passcodes are exported.",
+      "No private ML-DSA keys are exported.",
+      "No Recovery Kit payloads are exported.",
+      "No encrypted vault blobs are exported.",
+    ],
   };
 
   await shareText("Qubitor debug bundle", stringifyPayload(bundle));

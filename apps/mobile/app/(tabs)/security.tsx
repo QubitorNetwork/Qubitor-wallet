@@ -9,6 +9,7 @@ import {
   Activity,
   Code2,
   Settings,
+  Network,
 } from "lucide-react-native";
 import { PageContainer } from "@/components/PageContainer";
 import { PageHeader } from "@/components/PageHeader";
@@ -84,7 +85,14 @@ export default function SecurityCenter() {
             iconColor="green"
             label="Validation Mode"
             detail={snapshot.isQubitorDevnet ? "ML-DSA PQ signature" : "Hybrid signature"}
-            onPress={() => router.push("/developer-mode")}
+            onPress={() => router.push("/pq-details")}
+          />
+          <SettingsRow
+            Icon={Network}
+            iconColor="green"
+            label="Network Verification"
+            detail={`Chain ${snapshot.chainId}, system contracts`}
+            onPress={() => router.push("/network-verification")}
           />
           <SettingsRow
             Icon={KeyRound}

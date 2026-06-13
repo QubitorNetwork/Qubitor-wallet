@@ -1,7 +1,7 @@
 name: quanta-wallet
 title: Quanta Wallet
 base: core24
-version: "0.0.24"
+version: "0.0.25"
 summary: PQ-native Qubitor Network wallet
 description: |
   Quanta Wallet is the desktop wallet for Qubitor Network. It creates and

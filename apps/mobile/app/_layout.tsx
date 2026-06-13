@@ -1,5 +1,6 @@
 import "../global.css";
 import { Stack } from "expo-router";
+import { router } from "expo-router";
 import {
   useFonts,
   SpaceGrotesk_500Medium,
@@ -13,12 +14,16 @@ import {
 } from "@expo-google-fonts/jetbrains-mono";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
+import { AppState, type AppStateStatus } from "react-native";
 import * as SplashScreen from "expo-splash-screen";
 import { colors } from "@qubitor/ui-tokens";
 import { registerKeyVault } from "@qubitor/keystore";
 import { secureKeyVault } from "@/lib/secureKeyVault";
 import { tauriKeyVault } from "@/lib/tauriKeyVault";
+import { getWalletBootStateForAnyChain, lockWalletProfile } from "@/lib/pqDevWallet";
+import { getWalletLockTimeoutMinutes } from "@/lib/walletLockSettings";
+import { configuredQubitorChainId } from "@/lib/runtimeConfig";
 
 // Pick the platform key vault at startup. Inside the Tauri desktop shell the
 // blob lives in the OS keychain (Rust `vault_*` commands); on native mobile it
@@ -31,6 +36,7 @@ registerKeyVault(underTauri ? tauriKeyVault : secureKeyVault);
 SplashScreen.preventAutoHideAsync();
 
 export default function RootLayout() {
+  const backgroundedAt = useRef<number | undefined>();
   const [loaded] = useFonts({
     // Display (qb-display) — Space Grotesk
     SpaceGrotesk: SpaceGrotesk_500Medium,
@@ -49,6 +55,29 @@ export default function RootLayout() {
   useEffect(() => {
     if (loaded) SplashScreen.hideAsync();
   }, [loaded]);
+
+  useEffect(() => {
+    const onChange = async (nextState: AppStateStatus) => {
+      if (nextState === "background" || nextState === "inactive") {
+        backgroundedAt.current = Date.now();
+        return;
+      }
+      if (nextState !== "active" || backgroundedAt.current === undefined) return;
+      const elapsedMs = Date.now() - backgroundedAt.current;
+      backgroundedAt.current = undefined;
+      const timeoutMinutes = await getWalletLockTimeoutMinutes();
+      if (timeoutMinutes === 0 || elapsedMs < timeoutMinutes * 60_000) return;
+      const state = await getWalletBootStateForAnyChain(configuredQubitorChainId());
+      if (state.status === "unlocked" || state.status === "read-only-ready" || state.status === "migrate-required") {
+        lockWalletProfile("all");
+        router.replace("/unlock");
+      }
+    };
+    const subscription = AppState.addEventListener("change", (nextState) => {
+      void onChange(nextState);
+    });
+    return () => subscription.remove();
+  }, []);
 
   if (!loaded) return null;
 

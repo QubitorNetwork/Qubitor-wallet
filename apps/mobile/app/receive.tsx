@@ -1,7 +1,7 @@
 import { useState } from "react";
-import { View } from "react-native";
+import { Modal, Pressable, View } from "react-native";
 import QRCode from "react-native-qrcode-svg";
-import { Copy, Globe, Share2 } from "lucide-react-native";
+import { Copy, Gift, Globe, Maximize2, Share2 } from "lucide-react-native";
 import { PageContainer } from "@/components/PageContainer";
 import { PageHeader } from "@/components/PageHeader";
 import { Text } from "@/components/Text";
@@ -27,6 +27,7 @@ export default function Receive() {
   const [copyOpen, setCopyOpen] = useState(false);
   const [chainOpen, setChainOpen] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
+  const [qrOpen, setQrOpen] = useState(false);
 
   const copyAddress = async () => {
     if (!accountReady) return;
@@ -39,7 +40,8 @@ export default function Receive() {
 
       <View className="gap-8">
         <View className="items-center">
-          <QrFrame>
+          <Pressable onPress={() => accountReady && setQrOpen(true)}>
+            <QrFrame>
             {accountReady ? (
               <QRCode
                 value={account.address}
@@ -54,7 +56,8 @@ export default function Receive() {
                 </Text>
               </View>
             )}
-          </QrFrame>
+            </QrFrame>
+          </Pressable>
           <View className="mt-5 items-center gap-2">
             {accountReady ? (
               <AddressDisplay address={account.address} />
@@ -63,7 +66,10 @@ export default function Receive() {
                 —
               </Text>
             )}
-            <Badge label={account.security.mode} />
+            <View className="flex-row gap-2">
+              <Badge label={account.security.mode} />
+              <Badge label={snapshot.deploymentLabel} />
+            </View>
           </View>
         </View>
 
@@ -71,6 +77,15 @@ export default function Receive() {
           <IconAction label="Copy" Icon={Copy} onPress={copyAddress} disabled={!accountReady} />
           <IconAction label={chain || snapshot.chainName} Icon={Globe} onPress={() => setChainOpen(true)} />
           <IconAction label="Share" Icon={Share2} onPress={() => setShareOpen(true)} disabled={!accountReady} />
+        </View>
+        <View className="flex-row gap-3">
+          <IconAction label="Big QR" Icon={Maximize2} onPress={() => setQrOpen(true)} disabled={!accountReady} />
+          <IconAction
+            label={snapshot.faucetStatus === "requesting" ? "Funding" : "Faucet"}
+            Icon={Gift}
+            onPress={snapshot.requestFaucet}
+            disabled={!accountReady || snapshot.faucetStatus === "requesting"}
+          />
         </View>
 
         {snapshot.status === "fallback" ? (
@@ -83,11 +98,34 @@ export default function Receive() {
 
         <Card>
           <Text variant="body" muted>
-            Your Quanta Account is a normal 0x address with smarter security underneath.
+            This is your Quanta Account address. It uses a normal 0x format while Qubitor validates actions with
+            PQ-native account security.
           </Text>
         </Card>
+        {snapshot.faucetStatus === "error" ? (
+          <WarningCard
+            severity="warning"
+            title="Faucet unavailable"
+            detail={snapshot.faucetError ?? "The testnet faucet did not return funds."}
+          />
+        ) : null}
 
       </View>
+
+      <Modal visible={qrOpen && accountReady} transparent animationType="fade" onRequestClose={() => setQrOpen(false)}>
+        <Pressable className="flex-1 bg-black/80 items-center justify-center px-6" onPress={() => setQrOpen(false)}>
+          <View className="bg-qb-panel border border-qb-line rounded-xl p-6 items-center gap-4">
+            <Text variant="title" weight="semibold">
+              Quanta Account
+            </Text>
+            <QRCode value={account.address} size={280} color={colors.text} backgroundColor="transparent" />
+            <AddressDisplay address={account.address} />
+            <Text variant="caption" muted className="text-center">
+              Tap anywhere outside the QR to close.
+            </Text>
+          </View>
+        </Pressable>
+      </Modal>
 
       <ChainPickerSheet
         visible={chainOpen}

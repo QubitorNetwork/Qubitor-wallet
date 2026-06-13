@@ -3,12 +3,15 @@ import type { Hex, QubitorAccount, SecurityMode } from "@qubitor/core";
 import {
   deployQubitorDevPQAccount,
   defaultQubitorFaucetUrl,
+  defaultQubitorIndexerUrl,
   defaultQubitorPQRelayerUrl,
   defaultQubitorRpcUrl,
+  explorerTxUrl,
   formatBalanceWei,
   isQubitorNetwork,
   QUBITOR_TESTNET_CHAIN_ID,
   readAccountSnapshot,
+  readQubitorAccountActivity,
   readQubitorDevPQAccount,
   readQubitorDevPQRotateAuthorization,
   requestQubitorDevnetFaucet,
@@ -41,7 +44,13 @@ import {
   sendQubitorDevnetWalletPQTransfer,
 } from "@/lib/qbtDevnetWalletFlow";
 import { configuredQubitorChainId, readPublicEnv } from "@/lib/runtimeConfig";
-import { readWalletActivity, recordWalletActivity, type WalletActivityItem } from "@/lib/walletActivity";
+import {
+  indexedActivityItems,
+  mergeWalletActivity,
+  readWalletActivity,
+  recordWalletActivity,
+  type WalletActivityItem,
+} from "@/lib/walletActivity";
 import { getSelectedChainId, setSelectedChainId, type SelectableChainId } from "@/lib/networkPreference";
 
 type SnapshotStatus = "loading" | "live" | "fallback";
@@ -103,6 +112,10 @@ function configuredFaucetUrl() {
 
 function configuredPQRelayerUrl() {
   return readPublicEnv("EXPO_PUBLIC_QUBITOR_PQ_RELAYER_URL");
+}
+
+function configuredIndexerUrl() {
+  return readPublicEnv("EXPO_PUBLIC_QUBITOR_INDEXER_URL");
 }
 
 function buildAccount(chainId: number, address: Hex, deployed = false, mode: SecurityMode = "PQ Native"): QubitorAccount {
@@ -277,6 +290,7 @@ export function useAccountSnapshot() {
         rpcUrl: readPublicEnv("EXPO_PUBLIC_QUBITOR_RPC_URL"),
         faucetUrl: configuredFaucetUrl(),
         pqRelayerUrl: configuredPQRelayerUrl(),
+        indexerUrl: configuredIndexerUrl(),
       };
     }
     const chainId = supportedChainId(chainOverride);
@@ -285,6 +299,7 @@ export function useAccountSnapshot() {
       rpcUrl: defaultQubitorRpcUrl(chainId),
       faucetUrl: defaultQubitorFaucetUrl(chainId),
       pqRelayerUrl: defaultQubitorPQRelayerUrl(chainId),
+      indexerUrl: defaultQubitorIndexerUrl(chainId),
     };
   }, [chainOverride]);
 
@@ -342,6 +357,10 @@ export function useAccountSnapshot() {
           detail: `${formatBalanceWei(BigInt(faucetReceipt.amountWei))} QBT`,
           badge: "PQ Native",
           hash: faucetReceipt.hash,
+          explorerUrl: explorerTxUrl(faucetReceipt.hash, config.chainId),
+          source: "local",
+          direction: "received",
+          labels: ["Faucet", "Received"],
           to: preview.accountAddress,
           asset: "QBT",
           amountLabel: `${formatBalanceWei(BigInt(faucetReceipt.amountWei))} QBT`,
@@ -394,6 +413,10 @@ export function useAccountSnapshot() {
             detail: "Smart account is active onchain",
             badge: "PQ Native",
             hash: deployReceipt.transactionHash,
+            explorerUrl: explorerTxUrl(deployReceipt.transactionHash, config.chainId),
+            source: "local",
+            direction: "unknown",
+            labels: ["Account deployed"],
             security: "Account deployment",
             status: "success",
           },
@@ -454,6 +477,10 @@ export function useAccountSnapshot() {
             detail: `To ${pqTxReceipt.target.slice(0, 6)}...${pqTxReceipt.target.slice(-4)}`,
             badge: "PQ Native",
             hash: pqTxReceipt.transactionHash,
+            explorerUrl: explorerTxUrl(pqTxReceipt.transactionHash, config.chainId),
+            source: "local",
+            direction: "sent",
+            labels: ["Sent"],
             from: pqTxReceipt.accountAddress,
             to: pqTxReceipt.target,
             asset: "QBT",
@@ -532,6 +559,10 @@ export function useAccountSnapshot() {
           detail: `ML-DSA key v${nextProfile.keyVersion} is active`,
           badge: "PQ Native",
           hash: pqRotateReceipt.transactionHash,
+          explorerUrl: explorerTxUrl(pqRotateReceipt.transactionHash, config.chainId),
+          source: "local",
+          direction: "unknown",
+          labels: ["PQ key rotated"],
           security: pqRotateReceipt.signerMode ?? "ML-DSA PQ rotation",
           status: pqRotateReceipt.status === "success" ? "success" : "failed",
         },
@@ -590,10 +621,20 @@ export function useAccountSnapshot() {
       }
       const snapshot = await readAccountSnapshot(address, { chainId: config.chainId, rpcUrl: config.rpcUrl });
       const nextState = buildLiveState(snapshot, preview, pqAccount, pqProfile);
+      const context = { chainId: config.chainId, accountAddress: address };
+      const [localActivity, indexedActivity] = await Promise.all([
+        readWalletActivity(context),
+        readQubitorAccountActivity(address, {
+          chainId: config.chainId,
+          indexerUrl: config.indexerUrl,
+        })
+          .then((indexed) => indexedActivityItems(context, indexed))
+          .catch(() => []),
+      ]);
       return {
         ...nextState,
         walletStatus: bootState.status === "read-only-ready" && pqProfile ? "unlocked" : nextState.walletStatus,
-        activity: await readWalletActivity({ chainId: config.chainId, accountAddress: address }),
+        activity: mergeWalletActivity(localActivity, indexedActivity),
       };
     }
 
@@ -621,7 +662,7 @@ export function useAccountSnapshot() {
     return () => {
       cancelled = true;
     };
-  }, [config.chainId, config.pqRelayerUrl, config.rpcUrl, reloadKey]);
+  }, [config.chainId, config.indexerUrl, config.pqRelayerUrl, config.rpcUrl, reloadKey]);
 
   return {
     ...state,

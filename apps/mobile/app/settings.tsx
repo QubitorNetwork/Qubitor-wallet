@@ -1,8 +1,8 @@
-import { useState } from "react";
-import { Alert, View } from "react-native";
+import { useEffect, useState } from "react";
+import { View } from "react-native";
 import { router, type Href } from "expo-router";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { BookUser, KeyRound, ShieldCheck, Trash2, Code2 } from "lucide-react-native";
+import { BookUser, KeyRound, ShieldCheck, Trash2, Code2, LockKeyhole, Info } from "lucide-react-native";
 import { PageContainer } from "@/components/PageContainer";
 import { PageHeader } from "@/components/PageHeader";
 import { Text } from "@/components/Text";
@@ -11,10 +11,12 @@ import { Row } from "@/components/Row";
 import { SettingsRow } from "@/components/SettingsRow";
 import { Button } from "@/components/Button";
 import { WarningCard } from "@/components/WarningCard";
+import { Input } from "@/components/Input";
 import { useAccountSnapshot } from "@/hooks/useAccountSnapshot";
 import { isDebugMode } from "@qubitor/core";
-import { resetQuantaWallet } from "@/lib/pqDevWallet";
+import { lockWalletProfile, resetQuantaWallet } from "@/lib/pqDevWallet";
 import { SELECTABLE_CHAINS } from "@/lib/networkPreference";
+import { getWalletLockTimeoutMinutes, setWalletLockTimeoutMinutes } from "@/lib/walletLockSettings";
 
 function readEnv(key: string): string | undefined {
   const proc = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process;
@@ -27,8 +29,26 @@ export default function Settings() {
   const snapshot = useAccountSnapshot();
   const [resetting, setResetting] = useState(false);
   const [resetDone, setResetDone] = useState(false);
+  const [wipeArmed, setWipeArmed] = useState(false);
+  const [wipePhrase, setWipePhrase] = useState("");
+  const [lockTimeout, setLockTimeout] = useState(5);
 
   const biometricRequired = readEnv("EXPO_PUBLIC_QUBITOR_REQUIRE_BIOMETRIC") === "1";
+
+  useEffect(() => {
+    let active = true;
+    getWalletLockTimeoutMinutes().then((minutes) => {
+      if (active) setLockTimeout(minutes);
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const updateLockTimeout = async (minutes: number) => {
+    await setWalletLockTimeoutMinutes(minutes);
+    setLockTimeout(minutes);
+  };
 
   const performReset = async () => {
     setResetting(true);
@@ -44,15 +64,10 @@ export default function Settings() {
     }
   };
 
-  const confirmReset = () => {
-    Alert.alert(
-      "Reset wallet?",
-      "This permanently deletes the on-device ML-DSA key, activity, and address book. The only recovery is a previously exported backup.",
-      [
-        { text: "Cancel", style: "cancel" },
-        { text: "Reset", style: "destructive", onPress: performReset },
-      ],
-    );
+  const lockWallet = () => {
+    lockWalletProfile(snapshot.chainId);
+    snapshot.refresh();
+    router.replace("/unlock");
   };
 
   return (
@@ -102,7 +117,20 @@ export default function Settings() {
             value={biometricRequired ? "Required" : "Off (env)"}
             showChevron={false}
           />
+          <Row label="Lock timeout" value={lockTimeout === 0 ? "Manual only" : `${lockTimeout} min`} showChevron={false} />
           <Row label="Debug mode" value={isDebugMode() ? "On" : "Off"} showChevron={false} last />
+          <View className="flex-row gap-2 mt-4">
+            {[1, 5, 15, 0].map((minutes) => (
+              <Button
+                key={minutes}
+                variant={lockTimeout === minutes ? "primary" : "secondary"}
+                className="flex-1 px-2"
+                onPress={() => updateLockTimeout(minutes)}
+              >
+                {minutes === 0 ? "Manual" : `${minutes}m`}
+              </Button>
+            ))}
+          </View>
         </Card>
 
         <View>
@@ -128,11 +156,25 @@ export default function Settings() {
             onPress={() => router.push("/(tabs)/security")}
           />
           <SettingsRow
+            Icon={LockKeyhole}
+            iconColor="yellow"
+            label="Lock Wallet"
+            detail="Clear the in-memory ML-DSA unlock session"
+            onPress={lockWallet}
+          />
+          <SettingsRow
             Icon={Code2}
             iconColor="gray"
             label="Developer Mode"
             detail="Account contract, RPC, debug export"
             onPress={() => router.push("/developer-mode")}
+          />
+          <SettingsRow
+            Icon={Info}
+            iconColor="gray"
+            label="About Quanta Wallet"
+            detail="Version, stores, releases, privacy"
+            onPress={() => router.push("/about")}
           />
         </View>
 
@@ -148,11 +190,43 @@ export default function Settings() {
               Danger zone
             </Text>
             <Text variant="caption" muted className="mb-3">
-              Irreversible. Deletes the ML-DSA key, activity, and address book on this device.
+              Irreversible. Deletes the ML-DSA key, activity, address book, and local wallet state on this device.
             </Text>
-            <Button variant="danger" onPress={confirmReset} disabled={resetting}>
-              {resetting ? "Resetting…" : "Reset wallet"}
-            </Button>
+            {wipeArmed ? (
+              <View className="gap-3">
+                <Input
+                  label="Type WIPE to confirm"
+                  value={wipePhrase}
+                  onChangeText={setWipePhrase}
+                  autoCapitalize="characters"
+                />
+                <View className="flex-row gap-3">
+                  <Button
+                    className="flex-1"
+                    variant="secondary"
+                    onPress={() => {
+                      setWipeArmed(false);
+                      setWipePhrase("");
+                    }}
+                    disabled={resetting}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    className="flex-1"
+                    variant="danger"
+                    onPress={performReset}
+                    disabled={resetting || wipePhrase !== "WIPE"}
+                  >
+                    {resetting ? "Wiping…" : "Wipe"}
+                  </Button>
+                </View>
+              </View>
+            ) : (
+              <Button variant="danger" onPress={() => setWipeArmed(true)} disabled={resetting}>
+                Wipe wallet data
+              </Button>
+            )}
           </Card>
         )}
 

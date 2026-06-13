@@ -15,9 +15,10 @@ import {
   QUBITOR_ZERO_HASH,
   defaultQubitorRpcUrl,
   deriveQubitorPQAccountAddress,
+  signMLDSA65,
   supportedChainId,
 } from "@qubitor/evm";
-import { getAddress, isHex, type Hex } from "viem";
+import { getAddress, isHex, keccak256, stringToHex, type Hex } from "viem";
 import { createExtensionWalletProfile, unlockExtensionWalletProfile } from "./lib/extensionWalletVault";
 import { sendExtensionDappTransaction } from "./lib/extensionWalletRuntime";
 
@@ -116,6 +117,16 @@ interface ParsedTransactionRequest {
   data: Hex;
 }
 
+interface QubitorMessageProof {
+  address: string;
+  chainId: number;
+  algorithm: "ML-DSA-65";
+  publicKeyCommitment: Hex;
+  keyVersion: number;
+  messageHash: Hex;
+  signature: Hex;
+}
+
 interface PendingRequestDetails {
   requestId: string;
   type: RequestType;
@@ -187,6 +198,8 @@ function requestTypeForMethod(method: string): RequestType | null {
   if (method === "eth_requestAccounts" || method === "wallet_requestPermissions") return "connect";
   if (method === "eth_sendTransaction") return "tx";
   if (
+    method === "qubitor_signMessage" ||
+    method === "qubitor_signTypedData" ||
     method === "eth_sign" ||
     method === "personal_sign" ||
     method === "eth_signTypedData" ||
@@ -195,6 +208,19 @@ function requestTypeForMethod(method: string): RequestType | null {
     return "sign";
   }
   return null;
+}
+
+function isQubitorMessageSigningMethod(method: string): boolean {
+  return method === "qubitor_signMessage" || method === "qubitor_signTypedData";
+}
+
+function isLegacyMessageSigningMethod(method: string): boolean {
+  return (
+    method === "eth_sign" ||
+    method === "personal_sign" ||
+    method === "eth_signTypedData" ||
+    method === "eth_signTypedData_v4"
+  );
 }
 
 function isRpcPassthroughMethod(method: string): boolean {
@@ -615,6 +641,49 @@ function parseTransactionRequest(params: unknown[] = []): ParsedTransactionReque
   return { from, to, valueWei, data };
 }
 
+function messagePayloadFromParams(method: string, params: unknown[] = [], account: string): unknown {
+  const [first, second] = params;
+  if (typeof first === "string" && first.startsWith("0x") && second !== undefined) {
+    if (first.toLowerCase() !== account.toLowerCase()) {
+      throw new Error(`This signature request is for ${first.slice(0, 6)}...${first.slice(-4)}, not your active Quanta Account.`);
+    }
+    return second;
+  }
+  if (method === "qubitor_signTypedData" && second !== undefined) return second;
+  return first;
+}
+
+function hashMessagePayload(method: string, payload: unknown): Hex {
+  if (payload === undefined || payload === null) throw new Error("Missing message payload.");
+  if (method === "qubitor_signMessage" && typeof payload === "string") {
+    const messageHex = isHex(payload) ? (payload as Hex) : stringToHex(payload);
+    return keccak256(messageHex);
+  }
+  const encoded = JSON.stringify(payload);
+  if (!encoded) throw new Error("Could not encode message payload.");
+  return keccak256(stringToHex(encoded));
+}
+
+async function signQubitorMessageProof(
+  pending: PendingRequest,
+  passcode: string,
+  account: string,
+): Promise<QubitorMessageProof> {
+  const profile = await unlockExtensionWalletProfile(passcode);
+  const payload = messagePayloadFromParams(pending.method, pending.params, account);
+  const messageHash = hashMessagePayload(pending.method, payload);
+  const publicKeyCommitment = profile.currentPublicKeyCommitment ?? keccak256(profile.currentKey.publicKey);
+  return {
+    address: account,
+    chainId: profile.chainId,
+    algorithm: "ML-DSA-65",
+    publicKeyCommitment,
+    keyVersion: profile.keyVersion,
+    messageHash,
+    signature: signMLDSA65(messageHash, profile.currentKey.privateKey, { context: "QUBITOR_MESSAGE_V1" }),
+  };
+}
+
 async function getPendingRequestDetails(requestId: string): Promise<PendingRequestDetails | undefined> {
   const pending = pendingRequests.get(requestId) ?? (await readPendingProviderRequest(requestId));
   if (!pending) return undefined;
@@ -660,7 +729,7 @@ async function handleProviderRequest(message: ProviderRequestMessage, respond: (
       respond({ result: String(CHAIN_ID) });
       return;
     case "web3_clientVersion":
-      respond({ result: "QubitorWallet/0.0.1" });
+      respond({ result: `QuantaWallet/${extensionVersion()}` });
       return;
     case "eth_accounts":
       respond({ result: await connectedAccountResult(message.origin) });
@@ -704,34 +773,17 @@ async function handleProviderRequest(message: ProviderRequestMessage, respond: (
 
   const type = requestTypeForMethod(message.method);
   if (type) {
-    if (type === "connect") {
-      const account = await currentAccountAddress();
-      if (account) {
-        await setConnection(message.origin, ["view-account", "request-signatures"]);
-        await recordProviderDiagnostic("connect:auto-approved-existing-wallet", {
-          requestId: message.requestId,
-          origin: message.origin,
-          method: message.method,
-          detail: account,
-        });
-        respond({
-          result: message.method === "wallet_requestPermissions" ? await permissionsResult(message.origin) : [account],
-        });
-        return;
-      }
-    }
-
     if (type !== "connect" && !(await hasConnection(message.origin))) {
       respond(providerError(4100, "Connect this site to Quanta Wallet before signing requests."));
       return;
     }
-    if (message.method === "eth_requestAccounts" && (await hasConnection(message.origin))) {
+    if (type === "connect" && (await hasConnection(message.origin))) {
       const accounts = await connectedAccountResult(message.origin);
       if (accounts.length === 0) {
         respond(providerError(4100, "Unlock Quanta Wallet before connecting this site."));
         return;
       }
-      respond({ result: accounts });
+      respond({ result: message.method === "wallet_requestPermissions" ? await permissionsResult(message.origin) : accounts });
       return;
     }
     await openRequestWindow(type, message, respond);
@@ -850,14 +902,23 @@ async function resolvePendingRequest(message: ResolveRequestMessage): Promise<{ 
     }
 
     if (
-      pending.method === "eth_sign" ||
-      pending.method === "personal_sign" ||
-      pending.method === "eth_signTypedData" ||
-      pending.method === "eth_signTypedData_v4"
+      isLegacyMessageSigningMethod(pending.method)
     ) {
       throw new Error(
-        "Message signing is not enabled for this compatibility method yet. Quanta Wallet can sign and submit Qubitor transactions through eth_sendTransaction.",
+        "EOA signature not supported. Quanta Wallet only signs PQ-native messages with qubitor_signMessage or qubitor_signTypedData.",
       );
+    }
+
+    if (isQubitorMessageSigningMethod(pending.method)) {
+      if (!(await readConnection(pending.origin))) {
+        throw new Error("Connect this site to Quanta Wallet before signing messages.");
+      }
+      if (!message.passcode) throw new Error("Enter your Quanta Wallet passcode to sign this message.");
+      const account = await currentAccountAddress();
+      if (!account) throw new Error("Unlock Quanta Wallet before signing messages.");
+      const proof = await signQubitorMessageProof(pending, message.passcode, account);
+      await completePendingRequest(message.requestId, { result: proof });
+      return { ok: true };
     }
 
     throw new Error(`Qubitor provider does not support ${pending.method} yet.`);

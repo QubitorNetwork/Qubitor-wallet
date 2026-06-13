@@ -30,9 +30,9 @@ export function Row({ label, value, detail, trailing, onPress, showChevron = tru
           </Text>
         ) : null}
       </View>
-      <View className="flex-row items-center gap-2">
+      <View className="flex-row items-center gap-2 max-w-[62%] justify-end">
         {value ? (
-          <Text variant="body" muted>
+          <Text variant="body" muted className="text-right" numberOfLines={2}>
             {value}
           </Text>
         ) : null}

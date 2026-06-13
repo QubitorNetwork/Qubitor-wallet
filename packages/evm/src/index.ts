@@ -84,6 +84,8 @@ export const QUBITOR_TESTNET_RPC_URL = SDK_QUBITOR_TESTNET_RPC_URL;
 export const QUBITOR_TESTNET_FAUCET_URL = SDK_QUBITOR_TESTNET_FAUCET_URL;
 export const QUBITOR_TESTNET_PQ_RELAYER_URL = SDK_QUBITOR_TESTNET_FAUCET_URL;
 export const QUBITOR_TESTNET_EXPLORER_URL = SDK_QUBITOR_TESTNET_EXPLORER_URL;
+export const QUBITOR_DEVNET_INDEXER_URL = "http://127.0.0.1:18549";
+export const QUBITOR_TESTNET_INDEXER_URL = `${QUBITOR_TESTNET_EXPLORER_URL.replace(/\/$/, "")}/api/indexer`;
 export const QUBITOR_ACCOUNT_FACTORY = SDK_QUBITOR_ACCOUNT_FACTORY;
 export const QUBITOR_ACCOUNT_READINESS_REGISTRY = SDK_QUBITOR_ACCOUNT_READINESS_REGISTRY;
 export const QUBITOR_MLDSA65_PRECOMPILE = SDK_QUBITOR_MLDSA65_PRECOMPILE;
@@ -185,10 +187,33 @@ export function defaultQubitorPQRelayerUrl(chainId: SupportedChainId | number | 
     : QUBITOR_DEVNET_PQ_RELAYER_URL;
 }
 
+export function defaultQubitorIndexerUrl(chainId: SupportedChainId | number | string = QUBITOR_TESTNET_CHAIN_ID): string {
+  return supportedChainId(chainId) === QUBITOR_TESTNET_CHAIN_ID ? QUBITOR_TESTNET_INDEXER_URL : QUBITOR_DEVNET_INDEXER_URL;
+}
+
 export function explorerTxUrl(hash: string, chainId: SupportedChainId | number | string = QUBITOR_TESTNET_CHAIN_ID): string {
   const config = qubitorNetworkConfig(chainId);
   const explorer = config.blockExplorerUrls[0] ?? QUBITOR_TESTNET_EXPLORER_URL;
   return `${explorer.replace(/\/$/, "")}/tx/${hash}`;
+}
+
+export function explorerAddressUrl(
+  address: string,
+  chainId: SupportedChainId | number | string = QUBITOR_TESTNET_CHAIN_ID,
+): string {
+  const config = qubitorNetworkConfig(chainId);
+  const explorer = config.blockExplorerUrls[0] ?? QUBITOR_TESTNET_EXPLORER_URL;
+  return `${explorer.replace(/\/$/, "")}/address/${getAddress(address)}`;
+}
+
+export function explorerProofUrl(
+  path: string,
+  chainId: SupportedChainId | number | string = QUBITOR_TESTNET_CHAIN_ID,
+): string {
+  const config = qubitorNetworkConfig(chainId);
+  const explorer = config.blockExplorerUrls[0] ?? QUBITOR_TESTNET_EXPLORER_URL;
+  const normalizedPath = path.replace(/^\/+/, "");
+  return `${explorer.replace(/\/$/, "")}/${normalizedPath.startsWith("proofs/") ? normalizedPath : `proofs/${normalizedPath}`}`;
 }
 
 export function formatAddress(address: Hex, lead = 6, trail = 4): string {
@@ -202,6 +227,13 @@ export function formatBalanceWei(wei: bigint, decimals = 4): string {
   const num = Number(ether);
   if (Number.isNaN(num)) return ether;
   return num.toFixed(decimals);
+}
+
+export function formatNativeAmountInput(wei: bigint, decimals = 18, maxDecimals = 6): string {
+  const value = formatUnits(wei < 0n ? 0n : wei, decimals);
+  const [whole = "0", fraction = ""] = value.split(".");
+  const trimmedFraction = fraction.slice(0, maxDecimals).replace(/0+$/, "");
+  return trimmedFraction ? `${whole}.${trimmedFraction}` : whole;
 }
 
 export function formatTokenAmount(amount: bigint, tokenDecimals: number, displayDecimals = 4): string {
@@ -235,6 +267,38 @@ export interface EvmReadConfig {
   rpcUrl?: string;
   faucetUrl?: string;
   pqRelayerUrl?: string;
+  indexerUrl?: string;
+}
+
+export interface QubitorIndexerTransaction {
+  hash: Hex;
+  blockNumber?: number | string;
+  timestamp?: string;
+  from?: Hex;
+  to?: Hex;
+  value?: string;
+  status?: "pending" | "success" | "failed" | string;
+  gasUsed?: string;
+  effectiveGasPrice?: string;
+  tags?: string[];
+}
+
+export interface QubitorIndexerEvent {
+  id?: string;
+  type?: string;
+  address?: Hex;
+  transactionHash?: Hex;
+  blockNumber?: number | string;
+  timestamp?: string;
+  tags?: string[];
+  decoded?: Record<string, unknown>;
+}
+
+export interface QubitorIndexedAddressActivity {
+  address: Hex;
+  indexedAt?: string;
+  transactions?: QubitorIndexerTransaction[];
+  events?: QubitorIndexerEvent[];
 }
 
 export interface QubitorSmartAccountDeploymentState {
@@ -824,6 +888,55 @@ export async function readAccountSnapshot(address: Hex, config: EvmReadConfig = 
   };
 }
 
+function indexerUrlForConfig(config: EvmReadConfig): string {
+  return (config.indexerUrl ?? defaultQubitorIndexerUrl(config.chainId)).replace(/\/$/, "");
+}
+
+async function indexerFetch<T>(path: string, config: EvmReadConfig = {}): Promise<T> {
+  const url = `${indexerUrlForConfig(config)}${path.startsWith("/") ? path : `/${path}`}`;
+  let response: Response;
+  try {
+    response = await fetch(url, { headers: { accept: "application/json" } });
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : "network request failed";
+    throw new Error(`Qubitor indexer is unreachable at ${url}. Detail: ${detail}`);
+  }
+
+  let payload: unknown;
+  try {
+    payload = await response.json();
+  } catch {
+    payload = undefined;
+  }
+
+  if (!response.ok) {
+    const message =
+      payload && typeof payload === "object" && "error" in payload && typeof payload.error === "string"
+        ? payload.error
+        : `Qubitor indexer request failed with HTTP ${response.status}`;
+    throw new Error(message);
+  }
+
+  return payload as T;
+}
+
+export async function readQubitorAccountActivity(
+  address: Hex,
+  config: EvmReadConfig = {},
+): Promise<QubitorIndexedAddressActivity> {
+  const normalizedAddress = getAddress(address) as Hex;
+  const activity = await indexerFetch<QubitorIndexedAddressActivity>(
+    `/address/${normalizedAddress}`,
+    config,
+  );
+  return {
+    address: normalizedAddress,
+    indexedAt: activity.indexedAt,
+    transactions: activity.transactions ?? [],
+    events: activity.events ?? [],
+  };
+}
+
 export async function requestQubitorDevnetFaucet(
   address: Hex,
   config: Pick<EvmReadConfig, "chainId" | "faucetUrl"> = {},
@@ -1141,6 +1254,7 @@ export function createQubitorWalletBackend(config: QubitorWalletBackendConfig = 
     rpcUrl: config.rpcUrl ?? defaultQubitorRpcUrl(chainId),
     faucetUrl: config.faucetUrl ?? defaultQubitorFaucetUrl(chainId),
     pqRelayerUrl: config.pqRelayerUrl ?? defaultQubitorPQRelayerUrl(chainId),
+    indexerUrl: config.indexerUrl ?? defaultQubitorIndexerUrl(chainId),
   };
   const client = sdkCreateQubitorClient({ network, rpcUrl: runtime.rpcUrl });
 
@@ -1151,8 +1265,12 @@ export function createQubitorWalletBackend(config: QubitorWalletBackendConfig = 
     rpcUrl: runtime.rpcUrl,
     faucetUrl: runtime.faucetUrl,
     pqRelayerUrl: runtime.pqRelayerUrl,
+    indexerUrl: config.indexerUrl ?? defaultQubitorIndexerUrl(chainId),
     explorerTxUrl: (hash: string) => explorerTxUrl(hash, chainId),
+    explorerAddressUrl: (address: string) => explorerAddressUrl(address, chainId),
+    explorerProofUrl: (path: string) => explorerProofUrl(path, chainId),
     readAccountSnapshot: (address: Hex) => readAccountSnapshot(address, runtime),
+    readAccountActivity: (address: Hex) => readQubitorAccountActivity(address, runtime),
     readPQAccount: (args: { publicKey: Hex; salt?: Hex }) => readQubitorPQAccount(args, runtime),
     requestFaucet: (
       address: Hex,

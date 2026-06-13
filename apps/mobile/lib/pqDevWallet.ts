@@ -412,6 +412,17 @@ export function getUnlockedWalletProfile(chainId = DEFAULT_CHAIN_ID): QubitorDev
   return unlockedProfiles.get(normalizeChainId(chainId));
 }
 
+export function lockWalletProfile(chainId: number | "all" = DEFAULT_CHAIN_ID): void {
+  if (chainId === "all") {
+    unlockedProfiles.clear();
+    unlockedPasscodes.clear();
+    return;
+  }
+  const normalizedChainId = normalizeChainId(chainId);
+  unlockedProfiles.delete(normalizedChainId);
+  unlockedPasscodes.delete(normalizedChainId);
+}
+
 export function requireUnlockedWalletProfile(chainId = DEFAULT_CHAIN_ID): QubitorDevPQWalletProfile {
   const profile = getUnlockedWalletProfile(chainId);
   if (!profile) throw new Error("Unlock Quanta Wallet before signing or changing account security.");

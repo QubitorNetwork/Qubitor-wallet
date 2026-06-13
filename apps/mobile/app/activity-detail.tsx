@@ -24,6 +24,7 @@ type ActivityDetailItem = (ActivityItem | WalletActivityItem) & {
   security?: string;
   amountLabel?: string;
   chainId?: number;
+  explorerUrl?: string;
 };
 
 const iconFor: Record<ActivityItem["type"], LucideIcon> = {
@@ -50,7 +51,7 @@ export default function ActivityDetail() {
           <WarningCard
             severity="info"
             title="Activity not found"
-            detail="This entry isn't in the on-device activity log. Open it from the Activity tab to see live details."
+            detail="This entry isn't in the local or indexed activity feed. Open it from the Activity tab to see live details."
           />
           <View className="items-center">
             <Button variant="secondary" onPress={() => router.replace("/(tabs)/activity")}>
@@ -106,7 +107,7 @@ export default function ActivityDetail() {
           <View className="items-center">
             <Button
               variant="secondary"
-              onPress={() => openExternalUrl(explorerTxUrl(hash, item.chainId ?? snapshot.account.chainId))}
+              onPress={() => openExternalUrl(item.explorerUrl ?? explorerTxUrl(hash, item.chainId ?? snapshot.account.chainId))}
             >
               View on explorer
             </Button>

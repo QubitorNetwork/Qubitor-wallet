@@ -3,6 +3,7 @@ import type { Hex } from "@qubitor/core";
 import {
   deriveQubitorPQAccountAddress,
   defaultQubitorFaucetUrl,
+  defaultQubitorIndexerUrl,
   defaultQubitorPQRelayerUrl,
   defaultQubitorRpcUrl,
   generateMLDSA65KeyPair,
@@ -15,10 +16,13 @@ import {
   QUBITOR_TESTNET_CHAIN_ID,
   QUBITOR_TESTNET_EXPLORER_URL,
   QUBITOR_TESTNET_FAUCET_URL,
+  QUBITOR_TESTNET_INDEXER_URL,
   QUBITOR_TESTNET_PQ_RELAYER_URL,
   QUBITOR_TESTNET_RPC_URL,
   serializeQubitorPQTxV1,
   signQubitorPQTxV1,
+  explorerAddressUrl,
+  explorerProofUrl,
 } from "./index";
 
 function expect(condition: unknown, message: string): asserts condition {
@@ -85,8 +89,21 @@ expect(
   "testnet PQ relayer default must share the live public origin",
 );
 expect(
+  defaultQubitorIndexerUrl(QUBITOR_TESTNET_CHAIN_ID) === QUBITOR_TESTNET_INDEXER_URL,
+  "testnet indexer default must route through Explorer Lite",
+);
+expect(
   qubitorTestnet.blockExplorers?.default.url === QUBITOR_TESTNET_EXPLORER_URL,
   "testnet explorer must point at the public explorer",
+);
+expect(
+  explorerAddressUrl(account, QUBITOR_TESTNET_CHAIN_ID) === `${QUBITOR_TESTNET_EXPLORER_URL}/address/${account}`,
+  "address explorer links must use the public explorer",
+);
+expect(
+  explorerProofUrl(`pq-accounts/${account}`, QUBITOR_TESTNET_CHAIN_ID) ===
+    `${QUBITOR_TESTNET_EXPLORER_URL}/proofs/pq-accounts/${account}`,
+  "proof explorer links must use the public explorer proofs path",
 );
 expect(
   qubitorDevnet.blockExplorers?.default.url === "http://127.0.0.1:18547",
