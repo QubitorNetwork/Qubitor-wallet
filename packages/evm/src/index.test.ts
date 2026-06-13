@@ -23,6 +23,7 @@ import {
   signQubitorPQTxV1,
   explorerAddressUrl,
   explorerProofUrl,
+  submitQubitorDevPQRawTransaction,
 } from "./index";
 
 function expect(condition: unknown, message: string): asserts condition {
@@ -88,6 +89,34 @@ expect(
   defaultQubitorPQRelayerUrl(QUBITOR_TESTNET_CHAIN_ID) === QUBITOR_TESTNET_PQ_RELAYER_URL,
   "testnet PQ relayer default must share the live public origin",
 );
+{
+  const expectedHash = `0x${"12".repeat(32)}` as Hex;
+  const originalFetch = globalThis.fetch;
+  let rpcSubmitSeen = false;
+  let relayerSeen = false;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    if (url.includes("/pq-dev/send-raw")) relayerSeen = true;
+    const body = typeof init?.body === "string" ? JSON.parse(init.body) : {};
+    if (url === QUBITOR_TESTNET_RPC_URL && body.method === "qubitor_sendRawPQTransaction") {
+      rpcSubmitSeen = true;
+      return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id, result: expectedHash }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    throw new Error(`unexpected fetch ${url}`);
+  }) as typeof fetch;
+  try {
+    const receipt = await submitQubitorDevPQRawTransaction("0x04", { chainId: QUBITOR_TESTNET_CHAIN_ID });
+    expect(receipt.transactionHash === expectedHash, "public testnet PQ submit must return RPC transaction hash");
+    expect(receipt.status === "pending", "public testnet RPC submit must return pending receipt status");
+    expect(rpcSubmitSeen, "public testnet PQ submit must call qubitor_sendRawPQTransaction");
+    expect(!relayerSeen, "public testnet PQ submit must not call /pq-dev/send-raw before RPC");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+}
 expect(
   defaultQubitorIndexerUrl(QUBITOR_TESTNET_CHAIN_ID) === QUBITOR_TESTNET_INDEXER_URL,
   "testnet indexer default must route through Explorer Lite",

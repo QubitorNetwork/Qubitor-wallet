@@ -86,7 +86,7 @@ into a strict Snap package:
 ```sh
 sudo snap install snapcraft --classic
 snapcraft
-sudo snap install ./quanta-wallet_0.0.25_amd64.snap --dangerous
+sudo snap install ./quanta-wallet_0.0.26_amd64.snap --dangerous
 quanta-wallet
 ```
 

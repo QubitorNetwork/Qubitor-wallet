@@ -996,6 +996,17 @@ async function pqRelayerFetch<T>(
   return payload as T;
 }
 
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+async function getPendingNativeTransactionNonce(
+  client: ReturnType<typeof createPublicClient>,
+  address: Hex,
+): Promise<bigint> {
+  return BigInt(await client.getTransactionCount({ address, blockTag: "pending" }));
+}
+
 export async function readQubitorDevPQAccount(
   args: { publicKey: Hex; salt?: Hex },
   config: Pick<EvmReadConfig, "chainId" | "pqRelayerUrl"> = {},
@@ -1063,11 +1074,60 @@ export async function readQubitorDevPQTransferAuthorization(
 
 export async function submitQubitorDevPQRawTransaction(
   rawTransaction: Hex,
-  config: Pick<EvmReadConfig, "chainId" | "pqRelayerUrl"> = {},
+  config: Pick<EvmReadConfig, "chainId" | "rpcUrl" | "pqRelayerUrl"> = {},
 ): Promise<QubitorDevPQRawSubmitReceipt> {
-  return pqRelayerFetch<QubitorDevPQRawSubmitReceipt>("/pq-dev/send-raw", config, {
-    rawTransaction: assertHexBytes(rawTransaction, "rawTransaction"),
-  });
+  const raw = assertHexBytes(rawTransaction, "rawTransaction");
+  const chainId = supportedChainId(config.chainId ?? QUBITOR_TESTNET_CHAIN_ID);
+  const submitViaRpc = async (): Promise<QubitorDevPQRawSubmitReceipt> => {
+    const transactionHash = await sendRawQubitorPQTxV1(
+      raw,
+      { chainId, rpcUrl: config.rpcUrl },
+      "qubitor_sendRawPQTransaction",
+    );
+    return {
+      ok: true,
+      chainId,
+      transactionHash,
+      blockNumber: "0",
+      status: "pending",
+      signerMode: "PQ Native",
+      rawTransactionType: "QubitorPQTxV1",
+    };
+  };
+  const submitViaRelayer = () =>
+    pqRelayerFetch<QubitorDevPQRawSubmitReceipt>("/pq-dev/send-raw", config, {
+      rawTransaction: raw,
+    });
+
+  if (chainId === QUBITOR_TESTNET_CHAIN_ID && !config.pqRelayerUrl) {
+    try {
+      return await submitViaRpc();
+    } catch (rpcError) {
+      try {
+        return await submitViaRelayer();
+      } catch (relayerError) {
+        throw new Error(
+          `Could not submit QubitorPQTxV1 on Qubitor Testnet. RPC qubitor_sendRawPQTransaction failed: ${errorMessage(
+            rpcError,
+          )}; relayer fallback failed: ${errorMessage(relayerError)}`,
+        );
+      }
+    }
+  }
+
+  try {
+    return await submitViaRelayer();
+  } catch (relayerError) {
+    try {
+      return await submitViaRpc();
+    } catch (rpcError) {
+      throw new Error(
+        `Could not submit QubitorPQTxV1. Relayer failed: ${errorMessage(
+          relayerError,
+        )}; RPC qubitor_sendRawPQTransaction failed: ${errorMessage(rpcError)}`,
+      );
+    }
+  }
 }
 
 export async function sendQubitorDevPQTransfer(
@@ -1104,7 +1164,7 @@ export async function sendQubitorDevPQTransfer(
   const nativeTransactionNonce =
     args.nativeTransactionNonce !== undefined
       ? quantityToBigInt(args.nativeTransactionNonce, "nativeTransactionNonce")
-      : await client.getTransactionCount({ address: accountAddress });
+      : await getPendingNativeTransactionNonce(client, accountAddress);
   const signed = signQubitorPQTxV1({
     chainId,
     nonce: nativeTransactionNonce,
@@ -1195,7 +1255,7 @@ export async function sendQubitorDevPQKeyRotation(
   const nativeTransactionNonce =
     args.nativeTransactionNonce !== undefined
       ? quantityToBigInt(args.nativeTransactionNonce, "nativeTransactionNonce")
-      : await client.getTransactionCount({ address: accountAddress });
+      : await getPendingNativeTransactionNonce(client, accountAddress);
   const signed = signQubitorPQTxV1({
     chainId,
     nonce: nativeTransactionNonce,

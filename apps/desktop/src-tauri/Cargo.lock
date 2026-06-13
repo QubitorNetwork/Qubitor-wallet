@@ -2402,7 +2402,7 @@ dependencies = [
 
 [[package]]
 name = "quanta-wallet-desktop"
-version = "0.0.25"
+version = "0.0.26"
 dependencies = [
  "keyring",
  "libdbus-sys",
