@@ -1007,6 +1007,31 @@ async function getPendingNativeTransactionNonce(
   return BigInt(await client.getTransactionCount({ address, blockTag: "pending" }));
 }
 
+const MIN_PQ_GAS_TIP_CAP_WEI = 1_000_000_000n;
+const MIN_PQ_GAS_FEE_CAP_WEI = 2_000_000_000n;
+const PQ_REPLACEMENT_RETRY_LIMIT = 2;
+
+function isReplacementUnderpricedError(error: unknown): boolean {
+  return /replacement transaction underpriced|transaction underpriced/i.test(errorMessage(error));
+}
+
+async function readQubitorPQFeeCaps(
+  config: Pick<EvmReadConfig, "chainId" | "rpcUrl">,
+  attempt: number,
+): Promise<{ gasTipCap: bigint; gasFeeCap: bigint }> {
+  const gasPriceWei = decodeHexQuantity(await optionalJsonRpc<string>(config, "eth_gasPrice", []));
+  const multiplier = 1n << BigInt(Math.max(0, attempt));
+  const baseTipCap = gasPriceWei !== undefined && gasPriceWei > MIN_PQ_GAS_TIP_CAP_WEI ? gasPriceWei : MIN_PQ_GAS_TIP_CAP_WEI;
+  const baseFeeCap =
+    gasPriceWei !== undefined && gasPriceWei * 2n > MIN_PQ_GAS_FEE_CAP_WEI
+      ? gasPriceWei * 2n
+      : MIN_PQ_GAS_FEE_CAP_WEI;
+  return {
+    gasTipCap: baseTipCap * multiplier,
+    gasFeeCap: baseFeeCap * multiplier,
+  };
+}
+
 export async function readQubitorDevPQAccount(
   args: { publicKey: Hex; salt?: Hex },
   config: Pick<EvmReadConfig, "chainId" | "pqRelayerUrl"> = {},
@@ -1165,21 +1190,33 @@ export async function sendQubitorDevPQTransfer(
     args.nativeTransactionNonce !== undefined
       ? quantityToBigInt(args.nativeTransactionNonce, "nativeTransactionNonce")
       : await getPendingNativeTransactionNonce(client, accountAddress);
-  const signed = signQubitorPQTxV1({
-    chainId,
-    nonce: nativeTransactionNonce,
-    gasTipCap: "1000000000",
-    gasFeeCap: "2000000000",
-    gas: args.gas ?? "1500000",
-    account: accountAddress,
-    factorySalt: salt,
-    to: accountAddress,
-    value: 0n,
-    data: callData,
-    pqPublicKey: args.publicKey,
-    pqPrivateKey: args.privateKey,
-  });
-  const receipt = await submitQubitorDevPQRawTransaction(signed.rawTransaction, config);
+  let receipt: QubitorDevPQRawSubmitReceipt | undefined;
+  let submitError: unknown;
+  for (let attempt = 0; attempt <= PQ_REPLACEMENT_RETRY_LIMIT; attempt++) {
+    const feeCaps = await readQubitorPQFeeCaps({ chainId, rpcUrl: config.rpcUrl }, attempt);
+    const signed = signQubitorPQTxV1({
+      chainId,
+      nonce: nativeTransactionNonce,
+      gasTipCap: feeCaps.gasTipCap,
+      gasFeeCap: feeCaps.gasFeeCap,
+      gas: args.gas ?? "1500000",
+      account: accountAddress,
+      factorySalt: salt,
+      to: accountAddress,
+      value: 0n,
+      data: callData,
+      pqPublicKey: args.publicKey,
+      pqPrivateKey: args.privateKey,
+    });
+    try {
+      receipt = await submitQubitorDevPQRawTransaction(signed.rawTransaction, config);
+      break;
+    } catch (error) {
+      submitError = error;
+      if (!isReplacementUnderpricedError(error) || attempt === PQ_REPLACEMENT_RETRY_LIMIT) throw error;
+    }
+  }
+  if (!receipt) throw submitError instanceof Error ? submitError : new Error(errorMessage(submitError));
   return {
     ok: receipt.ok,
     accountAddress,
@@ -1256,21 +1293,33 @@ export async function sendQubitorDevPQKeyRotation(
     args.nativeTransactionNonce !== undefined
       ? quantityToBigInt(args.nativeTransactionNonce, "nativeTransactionNonce")
       : await getPendingNativeTransactionNonce(client, accountAddress);
-  const signed = signQubitorPQTxV1({
-    chainId,
-    nonce: nativeTransactionNonce,
-    gasTipCap: "1000000000",
-    gasFeeCap: "2000000000",
-    gas: args.gas ?? "1500000",
-    account: accountAddress,
-    factorySalt: salt,
-    to: accountAddress,
-    value: 0n,
-    data: callData,
-    pqPublicKey: args.publicKey,
-    pqPrivateKey: args.privateKey,
-  });
-  const receipt = await submitQubitorDevPQRawTransaction(signed.rawTransaction, config);
+  let receipt: QubitorDevPQRawSubmitReceipt | undefined;
+  let submitError: unknown;
+  for (let attempt = 0; attempt <= PQ_REPLACEMENT_RETRY_LIMIT; attempt++) {
+    const feeCaps = await readQubitorPQFeeCaps({ chainId, rpcUrl: config.rpcUrl }, attempt);
+    const signed = signQubitorPQTxV1({
+      chainId,
+      nonce: nativeTransactionNonce,
+      gasTipCap: feeCaps.gasTipCap,
+      gasFeeCap: feeCaps.gasFeeCap,
+      gas: args.gas ?? "1500000",
+      account: accountAddress,
+      factorySalt: salt,
+      to: accountAddress,
+      value: 0n,
+      data: callData,
+      pqPublicKey: args.publicKey,
+      pqPrivateKey: args.privateKey,
+    });
+    try {
+      receipt = await submitQubitorDevPQRawTransaction(signed.rawTransaction, config);
+      break;
+    } catch (error) {
+      submitError = error;
+      if (!isReplacementUnderpricedError(error) || attempt === PQ_REPLACEMENT_RETRY_LIMIT) throw error;
+    }
+  }
+  if (!receipt) throw submitError instanceof Error ? submitError : new Error(errorMessage(submitError));
   return {
     ok: receipt.ok,
     accountAddress,

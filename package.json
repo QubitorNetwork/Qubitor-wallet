@@ -1,7 +1,7 @@
 {
   "name": "qubitor",
   "private": true,
-  "version": "0.0.26",
+  "version": "0.0.27",
   "description": "Qubitor monorepo: Qubitor Network smart account wallet with PQ-native validation.",
   "scripts": {
     "dev": "turbo run dev",

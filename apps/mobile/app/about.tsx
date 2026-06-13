@@ -18,7 +18,7 @@ import {
   defaultQubitorIndexerUrl,
 } from "@qubitor/evm";
 
-const VERSION = readPublicEnv("EXPO_PUBLIC_QUANTA_WALLET_VERSION") ?? "0.0.26";
+const VERSION = readPublicEnv("EXPO_PUBLIC_QUANTA_WALLET_VERSION") ?? "0.0.27";
 const RELEASES_URL = "https://github.com/QubitorNetwork/Qubitor-wallet/releases";
 const CHROME_URL = "https://chromewebstore.google.com/detail/cjfhgclheennacdlpbmjopikfiaecmmn";
 const SNAP_URL = "https://snapcraft.io/quanta-wallet";
